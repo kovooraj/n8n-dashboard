@@ -34,6 +34,8 @@ const STATUS_COLORS: Record<string, string> = {
   'in progress': '#d4912a',
   'on hold': '#e05858',
   'to do': '#6a8870',
+  'planning / scoping': '#4a9eca',
+  cancelled: '#4a4a4a',
 };
 
 function SectionHeader({ eyebrow, title }: { eyebrow: string; title: string }) {

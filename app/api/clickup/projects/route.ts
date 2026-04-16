@@ -4,27 +4,36 @@ import type { ClickUpTask, TaskPlatform } from '@/lib/types';
 const LIST_ID = '901112680070';
 
 function detectPlatform(name: string): TaskPlatform {
-  const n = name.toLowerCase();
-  // FIN / Intercom chat bot
+  const n = name.toLowerCase().trim();
+  // FIN / Intercom — check first (many tasks start with "fin")
   if (
-    n.includes('fin tool') || n.includes(' fin ') || n.startsWith('fin') ||
+    n.startsWith('fin ') || n.startsWith('fin-') || n.startsWith('fin\t') ||
+    n.includes('fin tool') || n.includes('fin -') || n.includes('fin co') ||
     n.includes('refund') || n.includes('resend proof') || n.includes('change spec') ||
-    n.includes('order cancel') || n.includes('chat') || n.includes('intercom')
+    n.includes('order cancel') || n.includes('intercom') ||
+    n === 'fin'
   ) return 'fin';
-  // ElevenLabs voice / call
+  // ElevenLabs voice / call agents
   if (
-    n.includes('elevenlabs') || n.includes('eleven labs') ||
-    n.includes('call agent') || n.includes('outbound call') ||
-    n.includes('voice agent') || n.includes('call rubric') ||
-    n.includes('rippit') || n.includes('onboarding call') || n.includes('voice')
+    n.includes('elevenlabs') || n.includes('eleven labs') || n.includes('11labs') ||
+    n.includes('call agent') || n.includes('outbound call') || n.includes('call rubric') ||
+    n.includes('voice agent') || n.includes('rippit') || n.includes('onboarding call') ||
+    n.includes('call ai agent') || n.includes('voice call') ||
+    n.includes('reporting for voice') || n.includes('english voice') || n.includes('engish voice')
   ) return 'elevenlabs';
-  // N8N workflows
+  // N8N / automation workflows
   if (
     n.includes('n8n') || n.includes('workflow') || n.includes('supabase') ||
     n.includes('powerbi') || n.includes('power bi') || n.includes('tier agent') ||
     n.includes('notion') || n.includes('rag') || n.includes('brain') ||
-    n.includes('customer tier') || n.includes('salesforce') || n.includes('automation') ||
-    n.includes('claude') || n.includes('email') || n.includes('zapier')
+    n.includes('customer tier') || n.includes('salesforce') || n.includes('automat') ||
+    n.includes('email report') || n.includes('email report') || n.includes('icp report') ||
+    n.includes('approval agent') || n.includes('apollo') || n.includes('tier classifier') ||
+    n.includes('tier report') || n.includes('tiering') || n.includes('account approver') ||
+    n.includes('deal strategist') || n.includes('company auditor') || n.includes('ads report') ||
+    n.includes('forecasting') || n.includes('zapier') || n.includes('weekly report') ||
+    n.includes('ai report') || n.includes('ai agent') || n.includes('classifier') ||
+    n.includes('margin analyzer') || n.includes('retro') || n.includes('retroactive')
   ) return 'n8n';
   return 'general';
 }
