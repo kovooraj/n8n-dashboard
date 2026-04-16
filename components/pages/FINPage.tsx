@@ -16,9 +16,9 @@ const VolumeChart = dynamic(
 
 function SectionHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
   return (
-    <div style={{ marginBottom: 16 }}>
-      <p className="section-eyebrow" style={{ marginBottom: 4 }}>{eyebrow}</p>
-      <h2 style={{ fontSize: '1.5rem', fontWeight: 600, color: '#e4ede6', margin: 0 }}>{title}</h2>
+    <div style={{ marginBottom: 20 }}>
+      <p className="section-eyebrow" style={{ marginBottom: 6 }}>{eyebrow}</p>
+      <h2 style={{ fontSize: '1.75rem', fontWeight: 600, color: '#e4ede6', margin: 0 }}>{title}</h2>
     </div>
   );
 }
@@ -118,19 +118,34 @@ export function FINPage() {
         </div>
 
         {/* Section 2 */}
-        <SectionHeader eyebrow="2. KEY METRICS" title="Information" />
-        <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 24 }}>
-          <p style={{ fontSize: '0.75rem', fontWeight: 600, color: '#e4ede6', marginBottom: 8 }}>Key Improvement Areas</p>
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <SectionHeader eyebrow="2. KEY METRICS" title="Performance Summary" />
+        <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 20, marginBottom: 24 }}>
+          <p style={{ fontSize: '1rem', fontWeight: 700, color: '#e4ede6', marginBottom: 14 }}>Key Improvement Areas</p>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
             {[
-              'Increase FIN resolution rate from 28% toward 40%+ target through enhanced knowledge base curation.',
-              'Reduce escalation rate by improving FIN\'s handling of common billing and account queries.',
-              'Improve CSAT from 78.1% by reducing response latency on high-volume topic clusters.',
-              'Expand FIN coverage to handle new product category queries arriving via live chat.',
+              {
+                action: `Raise FIN resolution rate from ${loading ? 28 : (latest?.finAutomationRate ?? 28)}% → 40%+`,
+                detail: 'Audit the top 20 unresolved conversation topics and add targeted Fin Guidance rules for each. A 12-point gain saves ~50 additional agent-hours/week.',
+              },
+              {
+                action: 'Reduce escalation rate on billing & account queries',
+                detail: `${loading ? 856 : Math.round(((1 - (latest?.finAutomationRate ?? 28) / 100) * (latest?.finInvolvement ?? 1589)))} conversations escalated to agents this week. Map common billing intent patterns and add FIN procedures to handle order status, invoice questions, and refund eligibility autonomously.`,
+              },
+              {
+                action: `Push CSAT from ${loading ? 78.1 : (latest?.csat ?? 78.1)}% toward 85%`,
+                detail: 'Review negative-rated conversations for response latency outliers. Enable follow-up messaging for high-volume topic clusters where response time exceeds 2 seconds.',
+              },
+              {
+                action: 'Expand FIN to cover new product category queries',
+                detail: 'Roll stock, large format, and specialty substrate queries are arriving via live chat but not yet handled by FIN. Add 3–5 new procedures this sprint to cover the most frequent inbound topics.',
+              },
             ].map((item, i) => (
-              <li key={i} style={{ display: 'flex', gap: 8, fontSize: '0.75rem', color: '#6a8870', lineHeight: 1.5 }}>
-                <span style={{ color: '#3dba62', flexShrink: 0, marginTop: 2 }}>•</span>
-                {item}
+              <li key={i} style={{ display: 'flex', gap: 12, lineHeight: 1.6 }}>
+                <span style={{ color: '#3dba62', flexShrink: 0, marginTop: 3, fontSize: '0.9rem' }}>→</span>
+                <div>
+                  <p style={{ fontSize: '0.9rem', fontWeight: 600, color: '#e4ede6', marginBottom: 3 }}>{item.action}</p>
+                  <p style={{ fontSize: '0.825rem', color: '#8aad90' }}>{item.detail}</p>
+                </div>
               </li>
             ))}
           </ul>
@@ -156,11 +171,11 @@ export function FINPage() {
                 }}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{ fontSize: '0.75rem', fontWeight: 600, color: '#e4ede6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <p style={{ fontSize: '0.875rem', fontWeight: 600, color: '#e4ede6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {project.name}
                   </p>
                   {project.assignees.length > 0 && (
-                    <p style={{ fontSize: '0.65rem', color: '#6a8870', marginTop: 2 }}>
+                    <p style={{ fontSize: '0.75rem', color: '#6a8870', marginTop: 3 }}>
                       {project.assignees.join(', ')}
                     </p>
                   )}
