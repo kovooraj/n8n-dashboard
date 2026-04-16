@@ -1,19 +1,20 @@
 'use client';
 
 import { useState } from 'react';
-import { Search, BarChart2 } from 'lucide-react';
+import { Search, BarChart2, LayoutDashboard } from 'lucide-react';
 import type { SidebarWorkflow } from '@/lib/types';
 
 const HEALTH_COLOR: Record<string, string> = {
   healthy: '#3dba62',
   degraded: '#d4912a',
   failing: '#e05858',
+  unknown: '#6a8870',
 };
 
 interface AutomationWorkflowSidebarProps {
   workflows: SidebarWorkflow[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
+  selectedId: string | null; // null = overview selected
+  onSelect: (id: string | null) => void;
 }
 
 export function AutomationWorkflowSidebar({
@@ -26,6 +27,8 @@ export function AutomationWorkflowSidebar({
   const filtered = workflows.filter((w) =>
     w.name.toLowerCase().includes(query.toLowerCase())
   );
+
+  const isOverview = selectedId === null;
 
   return (
     <div
@@ -59,6 +62,38 @@ export function AutomationWorkflowSidebar({
         >
           Automations
         </p>
+
+        {/* Overview tab */}
+        <button
+          onClick={() => onSelect(null)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 7,
+            width: '100%',
+            padding: '7px 8px',
+            marginBottom: 8,
+            background: isOverview ? '#0f2014' : 'transparent',
+            border: 'none',
+            borderRadius: 6,
+            borderLeft: isOverview ? '2px solid #3dba62' : '2px solid transparent',
+            cursor: 'pointer',
+            textAlign: 'left',
+          }}
+          onMouseEnter={(e) => { if (!isOverview) (e.currentTarget as HTMLButtonElement).style.background = '#0a1a0d'; }}
+          onMouseLeave={(e) => { if (!isOverview) (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+        >
+          <LayoutDashboard size={12} color={isOverview ? '#3dba62' : '#6a8870'} />
+          <span style={{
+            fontSize: '0.65rem',
+            fontWeight: isOverview ? 700 : 500,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: isOverview ? '#e4ede6' : '#6a8870',
+          }}>
+            Overview
+          </span>
+        </button>
 
         {/* Search */}
         <div
@@ -165,7 +200,7 @@ export function AutomationWorkflowSidebar({
                 </span>
 
                 {/* Bar chart icon */}
-                <BarChart2 size={12} color="#6a8870" style={{ flexShrink: 0 }} />
+                <BarChart2 size={12} color={isSelected ? '#3dba62' : '#6a8870'} style={{ flexShrink: 0 }} />
               </button>
             );
           })

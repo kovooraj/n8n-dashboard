@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { PeriodTabs } from '@/components/PeriodTabs';
 import { ProgressMetric } from '@/components/ProgressMetric';
 import { BenchKPICard } from '@/components/BenchKPICard';
+import { RefreshCw } from 'lucide-react';
 import type { DashboardPeriod, N8NSnapshot, FINSnapshot, ElevenLabsSnapshot, ClickUpTask, ChartPoint } from '@/lib/types';
 import { buildSuccessChartData, formatCurrency, formatHours } from '@/lib/chartUtils';
 
@@ -68,9 +69,11 @@ export function OverviewPage() {
   const [elSnapshots, setElSnapshots]   = useState<ElevenLabsSnapshot[]>([]);
   const [projects, setProjects]         = useState<ClickUpTask[]>([]);
   const [loading, setLoading]           = useState(true);
+  const [refreshing, setRefreshing]     = useState(false);
 
-  useEffect(() => {
-    setLoading(true);
+  const fetchData = useCallback((isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
     Promise.all([
       fetch(`/api/notion/n8n?period=${period}`).then((r) => r.json()),
       fetch(`/api/notion/fin?period=${period}`).then((r) => r.json()),
@@ -81,9 +84,10 @@ export function OverviewPage() {
       setFinSnapshots(finData.snapshots ?? []);
       setElSnapshots(elData.snapshots ?? []);
       setProjects(cuData.tasks ?? []);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => {}).finally(() => { setLoading(false); setRefreshing(false); });
   }, [period]);
+
+  useEffect(() => { fetchData(false); }, [fetchData]);
 
   const latestN8N = n8nSnapshots[0] ?? null;
   const latestFIN = finSnapshots[0] ?? null;
@@ -115,8 +119,22 @@ export function OverviewPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      <div style={{ padding: '0 24px', flexShrink: 0, paddingTop: 16 }}>
+      <div style={{ padding: '0 24px', flexShrink: 0, paddingTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <PeriodTabs active={period} onChange={setPeriod} />
+        <button
+          onClick={() => fetchData(true)}
+          disabled={refreshing}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, background: 'transparent',
+            border: '1px solid #1a2c1d', borderRadius: 6, padding: '5px 10px',
+            cursor: refreshing ? 'not-allowed' : 'pointer', color: '#6a8870',
+            fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em',
+            textTransform: 'uppercase', opacity: refreshing ? 0.5 : 1,
+          }}
+        >
+          <RefreshCw size={11} color="#6a8870" className={refreshing ? 'animate-spin' : ''} />
+          {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }} className="custom-scroll">

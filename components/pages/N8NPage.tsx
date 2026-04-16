@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
+import { RefreshCw } from 'lucide-react';
 import { PeriodTabs } from '@/components/PeriodTabs';
 import { ProgressMetric } from '@/components/ProgressMetric';
 import { BenchKPICard } from '@/components/BenchKPICard';
@@ -104,9 +105,9 @@ function WorkflowDetail({ workflow }: { workflow: SidebarWorkflow }) {
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 24 }}>
         <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e4ede6', margin: 0 }}>
-          Automation: {workflow.name}
+          {workflow.name}
         </h1>
         <span style={{
           padding: '3px 10px', borderRadius: 4, background: `${color}18`,
@@ -118,7 +119,7 @@ function WorkflowDetail({ workflow }: { workflow: SidebarWorkflow }) {
       </div>
 
       {/* Stats row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 28 }}>
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16 }}>
           <p style={{ fontSize: '0.65rem', color: '#6a8870', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>Success Rate</p>
           <p style={{ fontSize: '1.5rem', fontWeight: 700, color: workflow.successRate != null ? (workflow.successRate >= 80 ? '#3dba62' : workflow.successRate >= 50 ? '#d4912a' : '#e05858') : '#6a8870' }}>
@@ -126,7 +127,7 @@ function WorkflowDetail({ workflow }: { workflow: SidebarWorkflow }) {
           </p>
         </div>
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16 }}>
-          <p style={{ fontSize: '0.65rem', color: '#6a8870', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>Failures (recent)</p>
+          <p style={{ fontSize: '0.65rem', color: '#6a8870', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>Failures (Recent)</p>
           <p style={{ fontSize: '1.5rem', fontWeight: 700, color: (workflow.failureCount ?? 0) > 0 ? '#e05858' : '#3dba62' }}>
             {workflow.failureCount ?? 0}
           </p>
@@ -150,7 +151,7 @@ function WorkflowDetail({ workflow }: { workflow: SidebarWorkflow }) {
             const isSuccess = exec.status === 'success';
             const isRunning = exec.status === 'running' || exec.status === 'waiting';
             const rc = isRunning ? '#d4912a' : isSuccess ? '#3dba62' : '#e05858';
-            const rl = isRunning ? exec.status.charAt(0).toUpperCase() + exec.status.slice(1) : isSuccess ? 'Success' : exec.status.charAt(0).toUpperCase() + exec.status.slice(1);
+            const rl = exec.status.charAt(0).toUpperCase() + exec.status.slice(1);
             const startedAt = exec.startedAt ? new Date(exec.startedAt) : null;
             const stoppedAt = exec.stoppedAt ? new Date(exec.stoppedAt) : null;
             const duration = startedAt && stoppedAt
@@ -173,7 +174,8 @@ function WorkflowDetail({ workflow }: { workflow: SidebarWorkflow }) {
               >
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: rc, flexShrink: 0 }} />
                 <span style={{ fontSize: '0.875rem', color: '#e4ede6', flex: 1 }}>
-                  {exec.mode ? `Mode: ${exec.mode}` : 'Execution'}
+                  {startedAt ? startedAt.toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Execution'}
+                  {exec.mode ? <span style={{ color: '#6a8870', marginLeft: 8, fontSize: '0.75rem' }}>{exec.mode}</span> : null}
                 </span>
                 {duration != null && (
                   <span style={{ fontSize: '0.75rem', color: '#6a8870' }}>{duration}s</span>
@@ -199,7 +201,8 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
   const [projects, setProjects] = useState<ClickUpTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [liveLoading, setLiveLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null); // null = overview
 
   // Fetch Notion snapshots for the chart
   useEffect(() => {
@@ -210,13 +213,15 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
       .catch(() => setLoading(false));
   }, [period]);
 
-  // Fetch live n8n workflow data (independent of period)
-  useEffect(() => {
-    setLiveLoading(true);
-    Promise.all([
-      fetch('/api/dashboard').then((r) => r.json()),
-      fetch('/api/clickup/projects').then((r) => r.json()),
-    ]).then(([dashData, cuData]) => {
+  // Fetch live n8n + ClickUp data
+  const fetchLive = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLiveLoading(true);
+    try {
+      const [dashData, cuData] = await Promise.all([
+        fetch('/api/dashboard').then((r) => r.json()),
+        fetch('/api/clickup/projects').then((r) => r.json()),
+      ]);
       const wfHealth: WorkflowHealthData[] = dashData.workflows ?? [];
       const mapped: SidebarWorkflow[] = wfHealth.map((w) => ({
         id: w.workflow.id,
@@ -230,17 +235,21 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
       }));
       setLiveWorkflows(mapped);
       setProjects(cuData.tasks ?? []);
+    } catch {
+      // keep previous data on error
+    } finally {
       setLiveLoading(false);
-    }).catch(() => setLiveLoading(false));
+      setRefreshing(false);
+    }
   }, []);
 
-  // Use prop override (for storybook/testing), else live data, else empty
-  const workflows = sidebarWorkflows ?? liveWorkflows;
+  useEffect(() => { fetchLive(false); }, [fetchLive]);
 
+  const workflows = sidebarWorkflows ?? liveWorkflows;
   const latest = snapshots[0];
   const successRate = latest
     ? Math.round(((latest.totalTriggers - latest.failedTriggers) / Math.max(1, latest.totalTriggers)) * 100)
-    : null;
+    : 94;
 
   const chartData: ChartPoint[] = buildSuccessChartData(
     snapshots.map((s) => ({ totalTriggers: s.totalTriggers, failedTriggers: s.failedTriggers, weekLabel: s.weekLabel }))
@@ -249,147 +258,161 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
   const selectedWorkflow = selectedId ? workflows.find((w) => w.id === selectedId) ?? null : null;
   const failingWorkflows = workflows.filter((w) => w.health === 'failing');
 
-  // N8N-specific ClickUp tasks
   const n8nProjects = projects.filter((p) => p.platform === 'n8n');
   const displayProjects = n8nProjects.length > 0 ? n8nProjects : projects.filter((p) => p.platform === 'general').slice(0, 4);
-
-  const activeCount = latest?.activeWorkflows ?? workflows.filter((w) => w.health !== 'unknown').length;
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* Main content */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ padding: '0 24px', flexShrink: 0, paddingTop: 16 }}>
+
+        {/* Top bar: period tabs + refresh */}
+        <div style={{ padding: '0 24px', flexShrink: 0, paddingTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <PeriodTabs active={period} onChange={setPeriod} />
+          <button
+            onClick={() => { fetchLive(true); setLoading(true); fetch(`/api/notion/n8n?period=${period}`).then(r => r.json()).then(d => { setSnapshots(d.snapshots ?? []); setLoading(false); }).catch(() => setLoading(false)); }}
+            disabled={refreshing}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              background: 'transparent', border: '1px solid #1a2c1d',
+              borderRadius: 6, padding: '5px 10px', cursor: refreshing ? 'not-allowed' : 'pointer',
+              color: '#6a8870', fontSize: '0.65rem', fontWeight: 600,
+              letterSpacing: '0.1em', textTransform: 'uppercase',
+              opacity: refreshing ? 0.5 : 1, transition: 'opacity 0.2s',
+            }}
+          >
+            <RefreshCw size={11} color="#6a8870" className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }} className="custom-scroll">
 
-          <SectionHeader eyebrow="1. OVERALL PERFORMANCE" title="N8N Performance Overview" />
-
-          <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 16 }}>
-            <ProgressMetric label="OVERALL AUTOMATION SUCCESS RATE" value={loading ? 94 : (successRate ?? 94)} />
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
-            <BenchKPICard
-              label="Total Automation Triggers"
-              value={loading ? '—' : (latest?.totalTriggers != null ? latest.totalTriggers.toLocaleString() : '—')}
-              showInfo
-            />
-            <BenchKPICard
-              label="Estimated Hours Saved"
-              value={loading ? '—' : formatHours(latest?.hoursSaved ?? 0)}
-              showInfo
-            />
-            <BenchKPICard
-              label="Estimated Revenue Impact"
-              value={loading ? '—' : formatCurrency(latest?.revenueImpact ?? 0)}
-              showInfo
-            />
-            <BenchKPICard
-              label="Workflows Active"
-              value={liveLoading ? '—' : activeCount}
-              showInfo
-              subBadge={
-                <span style={{ fontSize: '0.65rem', color: '#6a8870', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3dba62', display: 'inline-block' }} />
-                  {workflows.filter((w) => w.health === 'healthy').length} Healthy
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#d4912a', display: 'inline-block', marginLeft: 4 }} />
-                  {workflows.filter((w) => w.health === 'degraded').length} Degraded
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#e05858', display: 'inline-block', marginLeft: 4 }} />
-                  {failingWorkflows.length} Failing
-                </span>
-              }
-            />
-          </div>
-
-          <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 28 }}>
-            <p style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#6a8870', marginBottom: 12 }}>
-              Success vs Errors
-            </p>
-            <SuccessChart data={chartData} />
-          </div>
-
-          {/* Section 2: Overview or Detail */}
-          {selectedWorkflow ? (
-            <WorkflowDetail workflow={selectedWorkflow} />
-          ) : (
+          {/* ── OVERVIEW VIEW ── */}
+          {!selectedWorkflow && (
             <>
+              <SectionHeader eyebrow="1. OVERALL PERFORMANCE" title="N8N Performance Overview" />
+
+              <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 16 }}>
+                <ProgressMetric label="OVERALL AUTOMATION SUCCESS RATE" value={loading ? 94 : successRate} />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+                <BenchKPICard
+                  label="Total Automation Triggers"
+                  value={loading ? '—' : (latest?.totalTriggers != null ? latest.totalTriggers.toLocaleString() : '—')}
+                  showInfo
+                />
+                <BenchKPICard
+                  label="Estimated Hours Saved"
+                  value={loading ? '—' : formatHours(latest?.hoursSaved ?? 0)}
+                  showInfo
+                />
+                <BenchKPICard
+                  label="Estimated Revenue Impact"
+                  value={loading ? '—' : formatCurrency(latest?.revenueImpact ?? 0)}
+                  showInfo
+                />
+                <BenchKPICard
+                  label="Workflows Active"
+                  value={liveLoading ? '—' : (latest?.activeWorkflows ?? workflows.length)}
+                  showInfo
+                  subBadge={
+                    <span style={{ fontSize: '0.65rem', color: '#6a8870', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3dba62', display: 'inline-block' }} />
+                      {workflows.filter((w) => w.health === 'healthy').length} Healthy
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#d4912a', display: 'inline-block', marginLeft: 4 }} />
+                      {workflows.filter((w) => w.health === 'degraded').length} Degraded
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#e05858', display: 'inline-block', marginLeft: 4 }} />
+                      {failingWorkflows.length} Failing
+                    </span>
+                  }
+                />
+              </div>
+
+              <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 28 }}>
+                <p style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#6a8870', marginBottom: 12 }}>
+                  Success vs Errors
+                </p>
+                <SuccessChart data={chartData} />
+              </div>
+
               <SectionHeader eyebrow="2. AUTOMATIONS" title="All Workflows" />
 
-              {liveLoading && (
+              {liveLoading ? (
                 <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 20, textAlign: 'center', marginBottom: 14 }}>
                   <p style={{ fontSize: '0.8rem', color: '#6a8870' }}>Fetching live workflow data from n8n…</p>
                 </div>
+              ) : (
+                <>
+                  {failingWorkflows.length > 0 && (
+                    <div style={{
+                      background: 'rgba(224,88,88,0.08)', border: '1px solid rgba(224,88,88,0.25)',
+                      borderRadius: 8, padding: '10px 14px', marginBottom: 14,
+                      display: 'flex', alignItems: 'center', gap: 10,
+                    }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#e05858', flexShrink: 0 }} />
+                      <span style={{ fontSize: '0.85rem', color: '#e05858', fontWeight: 600 }}>
+                        {failingWorkflows.length} workflow{failingWorkflows.length > 1 ? 's' : ''} currently failing:&nbsp;
+                      </span>
+                      <span style={{ fontSize: '0.85rem', color: '#e4ede6' }}>
+                        {failingWorkflows.map((w) => w.name).join(', ')}
+                      </span>
+                    </div>
+                  )}
+                  <WorkflowsOverview workflows={workflows} />
+                </>
               )}
 
-              {!liveLoading && failingWorkflows.length > 0 && (
-                <div style={{
-                  background: 'rgba(224,88,88,0.08)', border: '1px solid rgba(224,88,88,0.25)',
-                  borderRadius: 8, padding: '10px 14px', marginBottom: 14,
-                  display: 'flex', alignItems: 'center', gap: 10,
-                }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#e05858', flexShrink: 0 }} />
-                  <span style={{ fontSize: '0.85rem', color: '#e05858', fontWeight: 600 }}>
-                    {failingWorkflows.length} workflow{failingWorkflows.length > 1 ? 's' : ''} currently failing:&nbsp;
-                  </span>
-                  <span style={{ fontSize: '0.85rem', color: '#e4ede6' }}>
-                    {failingWorkflows.map((w) => w.name).join(', ')}
-                  </span>
+              {/* N8N ClickUp Projects */}
+              {!liveLoading && displayProjects.length > 0 && (
+                <div style={{ marginTop: 28 }}>
+                  <SectionHeader eyebrow="3. AI PROJECTS" title="N8N Workflow Projects" />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {displayProjects.map((project) => {
+                      const statusColor = STATUS_COLORS[project.status] ?? '#6a8870';
+                      return (
+                        <div
+                          key={project.id}
+                          style={{
+                            background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8,
+                            padding: '12px 14px', display: 'flex', justifyContent: 'space-between',
+                            alignItems: 'center', gap: 12,
+                          }}
+                        >
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ fontSize: '0.875rem', fontWeight: 600, color: '#e4ede6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {project.name}
+                            </p>
+                            {project.assignees.length > 0 && (
+                              <p style={{ fontSize: '0.75rem', color: '#6a8870', marginTop: 3 }}>
+                                {project.assignees.join(', ')}
+                              </p>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+                            <span style={{
+                              padding: '2px 8px', borderRadius: 4, background: `${statusColor}18`,
+                              border: `1px solid ${statusColor}`, fontSize: '0.6rem', fontWeight: 700,
+                              letterSpacing: '0.1em', textTransform: 'uppercase', color: statusColor,
+                            }}>
+                              {project.status}
+                            </span>
+                            <span style={{ fontSize: '0.6rem', color: '#6a8870' }}>
+                              Updated {new Date(project.updatedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
-
-              {!liveLoading && <WorkflowsOverview workflows={workflows} />}
             </>
           )}
 
-          {/* Section 3: N8N ClickUp Projects */}
-          {!liveLoading && displayProjects.length > 0 && (
-            <>
-              <div style={{ marginTop: 28 }}>
-                <SectionHeader eyebrow="3. AI PROJECTS" title="N8N Workflow Projects" />
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {displayProjects.map((project) => {
-                  const statusColor = STATUS_COLORS[project.status] ?? '#6a8870';
-                  return (
-                    <div
-                      key={project.id}
-                      style={{
-                        background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8,
-                        padding: '12px 14px', display: 'flex', justifyContent: 'space-between',
-                        alignItems: 'center', gap: 12,
-                      }}
-                    >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ fontSize: '0.875rem', fontWeight: 600, color: '#e4ede6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {project.name}
-                        </p>
-                        {project.assignees.length > 0 && (
-                          <p style={{ fontSize: '0.75rem', color: '#6a8870', marginTop: 3 }}>
-                            {project.assignees.join(', ')}
-                          </p>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
-                        <span style={{
-                          padding: '2px 8px', borderRadius: 4, background: `${statusColor}18`,
-                          border: `1px solid ${statusColor}`, fontSize: '0.6rem', fontWeight: 700,
-                          letterSpacing: '0.1em', textTransform: 'uppercase', color: statusColor,
-                        }}>
-                          {project.status}
-                        </span>
-                        <span style={{ fontSize: '0.6rem', color: '#6a8870' }}>
-                          Updated {new Date(project.updatedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )}
+          {/* ── WORKFLOW DETAIL VIEW ── */}
+          {selectedWorkflow && <WorkflowDetail workflow={selectedWorkflow} />}
 
           <div style={{ height: 24 }} />
         </div>
@@ -399,8 +422,9 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
       <AutomationWorkflowSidebar
         workflows={liveLoading ? [] : workflows}
         selectedId={selectedId}
-        onSelect={(id) => setSelectedId((prev) => (prev === id ? null : id))}
+        onSelect={(id) => setSelectedId(id)}
       />
+
     </div>
   );
 }
