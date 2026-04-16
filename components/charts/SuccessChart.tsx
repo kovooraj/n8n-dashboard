@@ -51,7 +51,7 @@ function CustomTooltip({
 export function SuccessChart({ data }: SuccessChartProps) {
   return (
     <ResponsiveContainer width="100%" height={200}>
-      <LineChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+      <LineChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: data.length > 7 ? 20 : 4 }}>
         <CartesianGrid
           strokeDasharray="3 3"
           stroke="#1a2c1d"
@@ -62,6 +62,9 @@ export function SuccessChart({ data }: SuccessChartProps) {
           tick={{ fill: '#6a8870', fontSize: 10 }}
           tickLine={false}
           axisLine={{ stroke: '#1a2c1d' }}
+          angle={data.length > 7 ? -35 : 0}
+          textAnchor={data.length > 7 ? 'end' : 'middle'}
+          interval={data.length > 10 ? 1 : 0}
         />
         <YAxis
           tick={{ fill: '#6a8870', fontSize: 10 }}

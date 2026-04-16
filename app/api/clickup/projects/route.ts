@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import type { ClickUpTask, TaskPlatform } from '@/lib/types';
 
+// Never cache this route — always hit ClickUp live
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 const LIST_ID = '901112680070';
 const CLICKUP_API = 'https://api.clickup.com/api/v2';
 
@@ -109,13 +113,14 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({ tasks, mock: false });
+    return NextResponse.json({ tasks, mock: false }, {
+      headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[clickup/projects] error:', message);
     return NextResponse.json(
       { tasks: [], mock: false, error: message },
-      { status: 200 }
+      { status: 200, headers: { 'Cache-Control': 'no-store' } }
     );
   }
 }

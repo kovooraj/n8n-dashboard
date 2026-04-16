@@ -51,7 +51,7 @@ function CustomTooltip({
 export function VolumeChart({ data }: VolumeChartProps) {
   return (
     <ResponsiveContainer width="100%" height={200}>
-      <AreaChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+      <AreaChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: data.length > 7 ? 20 : 4 }}>
         <defs>
           <linearGradient id="totalGrad" x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%" stopColor="rgba(14,24,16,0.8)" stopOpacity={0.8} />
@@ -68,6 +68,9 @@ export function VolumeChart({ data }: VolumeChartProps) {
           tick={{ fill: '#6a8870', fontSize: 10 }}
           tickLine={false}
           axisLine={{ stroke: '#1a2c1d' }}
+          angle={data.length > 7 ? -35 : 0}
+          textAnchor={data.length > 7 ? 'end' : 'middle'}
+          interval={data.length > 10 ? 1 : 0}
         />
         <YAxis
           tick={{ fill: '#6a8870', fontSize: 10 }}
