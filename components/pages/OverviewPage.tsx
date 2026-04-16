@@ -73,16 +73,32 @@ export function OverviewPage() {
   const fetchData = useCallback((isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
+    // Cache-buster query so any intermediate proxy can't serve stale JSON
+    const bust = `_t=${Date.now()}`;
     Promise.allSettled([
-      fetch(`/api/notion/n8n?period=${period}`).then((r) => r.json()),
-      fetch(`/api/notion/fin?period=${period}`).then((r) => r.json()),
-      fetch(`/api/notion/elevenlabs?period=${period}`).then((r) => r.json()),
-      fetch('/api/clickup/projects').then((r) => r.json()),
+      fetch(`/api/notion/n8n?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/notion/fin?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/notion/elevenlabs?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
     ]).then(([n8nResult, finResult, elResult, cuResult]) => {
       if (n8nResult.status === 'fulfilled') setN8nSnapshots(n8nResult.value.snapshots ?? []);
       if (finResult.status === 'fulfilled') setFinSnapshots(finResult.value.snapshots ?? []);
       if (elResult.status === 'fulfilled') setElSnapshots(elResult.value.snapshots ?? []);
-      if (cuResult.status === 'fulfilled') setProjects(cuResult.value.tasks ?? []);
+      if (cuResult.status === 'fulfilled') {
+        const tasks = cuResult.value.tasks ?? [];
+        setProjects(tasks);
+        // Diagnostic — visible in DevTools to confirm build is active
+        console.log(`[dashboard] ClickUp tasks loaded: ${tasks.length}`, {
+          build: 'v2',
+          period,
+          statuses: tasks.reduce((a: Record<string, number>, t: ClickUpTask) => {
+            a[t.status] = (a[t.status] ?? 0) + 1;
+            return a;
+          }, {}),
+        });
+      } else {
+        console.error('[dashboard] ClickUp fetch failed:', cuResult.reason);
+      }
     }).catch(() => {}).finally(() => { setLoading(false); setRefreshing(false); });
   }, [period]);
 
@@ -107,10 +123,12 @@ export function OverviewPage() {
     ? Math.round(((latestN8N.totalTriggers - latestN8N.failedTriggers) / Math.max(1, latestN8N.totalTriggers)) * 100)
     : 94;
 
-  const backlogProjects    = projects.filter((p) => p.status === 'to do');
-  const scopingProjects    = projects.filter((p) => p.status === 'planning / scoping');
-  const inProgressProjects = projects.filter((p) => p.status === 'in progress');
-  const completedProjects  = projects.filter((p) => p.status === 'complete');
+  // Normalize status for robust matching (handles any casing/whitespace drift from ClickUp)
+  const norm = (s: string) => s.toLowerCase().trim();
+  const backlogProjects    = projects.filter((p) => norm(p.status) === 'to do');
+  const scopingProjects    = projects.filter((p) => norm(p.status) === 'planning / scoping');
+  const inProgressProjects = projects.filter((p) => norm(p.status) === 'in progress');
+  const completedProjects  = projects.filter((p) => norm(p.status) === 'complete');
   const highUrgentInProg   = inProgressProjects.filter((p) => p.priority === 'high' || p.priority === 'urgent');
 
   const chartData: ChartPoint[] = buildSuccessChartData(
@@ -123,20 +141,32 @@ export function OverviewPage() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ padding: '0 24px', flexShrink: 0, paddingTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <PeriodTabs active={period} onChange={setPeriod} />
-        <button
-          onClick={() => fetchData(true)}
-          disabled={refreshing}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6, background: 'transparent',
-            border: '1px solid #1a2c1d', borderRadius: 6, padding: '5px 10px',
-            cursor: refreshing ? 'not-allowed' : 'pointer', color: '#6a8870',
-            fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em',
-            textTransform: 'uppercase', opacity: refreshing ? 0.5 : 1,
-          }}
-        >
-          <RefreshCw size={11} color="#6a8870" className={refreshing ? 'animate-spin' : ''} />
-          {refreshing ? 'Refreshing…' : 'Refresh'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span
+            title="Build marker — confirms browser is on the latest bundle"
+            style={{
+              fontSize: '0.6rem', color: '#6a8870', letterSpacing: '0.08em',
+              textTransform: 'uppercase', padding: '3px 8px', borderRadius: 4,
+              background: 'rgba(61,186,98,0.08)', border: '1px solid rgba(61,186,98,0.25)',
+            }}
+          >
+            Build v2 · {loading ? '…' : `${projects.length} tasks`}
+          </span>
+          <button
+            onClick={() => fetchData(true)}
+            disabled={refreshing}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, background: 'transparent',
+              border: '1px solid #1a2c1d', borderRadius: 6, padding: '5px 10px',
+              cursor: refreshing ? 'not-allowed' : 'pointer', color: '#6a8870',
+              fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em',
+              textTransform: 'uppercase', opacity: refreshing ? 0.5 : 1,
+            }}
+          >
+            <RefreshCw size={11} color="#6a8870" className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }} className="custom-scroll">

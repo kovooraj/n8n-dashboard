@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { FINSnapshot, DashboardPeriod } from '@/lib/types';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 const DB_ID = '344bc9ab-b211-8078-848d-e21dfb052948';
 
 const MOCK_SNAPSHOTS: FINSnapshot[] = [

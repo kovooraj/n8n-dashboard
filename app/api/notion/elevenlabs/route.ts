@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { ElevenLabsSnapshot, DashboardPeriod } from '@/lib/types';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 const DB_ID = '344bc9ab-b211-8088-9a0d-f8e92d02a1a4';
 
 const MOCK_SNAPSHOTS: ElevenLabsSnapshot[] = [

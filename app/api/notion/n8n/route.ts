@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { N8NSnapshot, DashboardPeriod } from '@/lib/types';
 
+// Never cache this route — period parameter drives fresh Notion reads every request
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 const DB_ID = '88be8990-0676-4789-a5ca-0fdbff431c46';
 
 // Mock data for when no token is present
@@ -133,7 +137,9 @@ export async function GET(request: NextRequest) {
       revenueImpact: getFormula(row, 'Total Revenue Impact'),
     }));
 
-    return NextResponse.json({ snapshots, mock: false });
+    return NextResponse.json({ snapshots, mock: false }, {
+      headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json(

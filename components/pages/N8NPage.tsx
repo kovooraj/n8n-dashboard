@@ -256,7 +256,7 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
   // Fetch Notion snapshots for the chart
   useEffect(() => {
     setLoading(true);
-    fetch(`/api/notion/n8n?period=${period}`)
+    fetch(`/api/notion/n8n?period=${period}&_t=${Date.now()}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((data) => { setSnapshots(data.snapshots ?? []); setLoading(false); })
       .catch(() => setLoading(false));
@@ -267,9 +267,10 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
     if (isRefresh) setRefreshing(true);
     else setLiveLoading(true);
     try {
+      const bust = `_t=${Date.now()}`;
       const [dashResult, cuResult] = await Promise.allSettled([
-        fetch('/api/dashboard').then((r) => r.json()),
-        fetch('/api/clickup/projects').then((r) => r.json()),
+        fetch(`/api/dashboard?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+        fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
       ]);
       if (dashResult.status === 'fulfilled') {
         const dashData = dashResult.value;
@@ -287,7 +288,11 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
         setLiveWorkflows(mapped);
       }
       if (cuResult.status === 'fulfilled') {
-        setProjects(cuResult.value.tasks ?? []);
+        const tasks = cuResult.value.tasks ?? [];
+        setProjects(tasks);
+        console.log(`[n8n-page] ClickUp tasks: ${tasks.length}, n8n-tagged: ${tasks.filter((t: ClickUpTask) => t.platform === 'n8n').length}`);
+      } else {
+        console.error('[n8n-page] ClickUp fetch failed:', cuResult.reason);
       }
     } catch {
       // keep previous data on error
