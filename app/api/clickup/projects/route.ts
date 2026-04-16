@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { ClickUpTask, TaskPlatform } from '@/lib/types';
 
 const LIST_ID = '901112680070';
+const CLICKUP_API = 'https://api.clickup.com/api/v2';
 
 // Map ClickUp tag names → platform buckets
 const TAG_PLATFORM_MAP: Record<string, TaskPlatform> = {
@@ -51,6 +52,33 @@ function detectPlatformFromName(name: string): TaskPlatform {
   return 'general';
 }
 
+async function fetchAllTasks(key: string): Promise<Record<string, unknown>[]> {
+  const all: Record<string, unknown>[] = [];
+  let page = 0;
+
+  while (true) {
+    const url = `${CLICKUP_API}/list/${LIST_ID}/task?include_closed=true&page=${page}&subtasks=false`;
+    const res = await fetch(url, {
+      headers: { Authorization: key },
+      cache: 'no-store',
+    });
+
+    if (!res.ok) {
+      throw new Error(`ClickUp API error ${res.status}: ${await res.text()}`);
+    }
+
+    const data = await res.json() as { tasks: Record<string, unknown>[] };
+    const tasks = data.tasks ?? [];
+    all.push(...tasks);
+
+    // ClickUp returns up to 100 tasks per page; fewer means last page
+    if (tasks.length < 100) break;
+    page++;
+  }
+
+  return all;
+}
+
 export async function GET() {
   const key = process.env.CLICKUP_API_KEY;
   if (!key) {
@@ -58,8 +86,7 @@ export async function GET() {
   }
 
   try {
-    const { getListTasks } = await import('@/lib/clickup');
-    const raw = await getListTasks(LIST_ID);
+    const raw = await fetchAllTasks(key);
 
     const tasks: ClickUpTask[] = raw.map((t) => {
       const status = t.status as { status?: string; color?: string } | undefined;
@@ -76,7 +103,7 @@ export async function GET() {
         statusColor: status?.color ?? '#6a8870',
         url: (t.url as string) ?? '#',
         assignees: assignees.map((a) => a.username ?? a.email ?? 'Unknown'),
-        updatedAt: new Date((t.date_updated as number) ?? 0).toISOString(),
+        updatedAt: new Date(Number(t.date_updated ?? 0)).toISOString(),
         platform,
         priority,
       };
