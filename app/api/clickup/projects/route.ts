@@ -81,15 +81,12 @@ async function fetchAllTasks(key: string): Promise<Record<string, unknown>[]> {
 
 export async function GET() {
   const key = process.env.CLICKUP_API_KEY;
-  console.log('[clickup/projects] key present:', !!key, 'length:', key?.length ?? 0);
   if (!key) {
-    console.error('[clickup/projects] CLICKUP_API_KEY is not set');
     return NextResponse.json({ tasks: [], mock: true, error: 'CLICKUP_API_KEY not set' });
   }
 
   try {
     const raw = await fetchAllTasks(key);
-    console.log('[clickup/projects] fetched', raw.length, 'tasks');
 
     const tasks: ClickUpTask[] = raw.map((t) => {
       const status = t.status as { status?: string; color?: string } | undefined;
