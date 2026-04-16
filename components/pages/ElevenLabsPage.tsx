@@ -43,12 +43,12 @@ export function ElevenLabsPage() {
   const fetchData = useCallback((isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
-    Promise.all([
+    Promise.allSettled([
       fetch(`/api/notion/elevenlabs?period=${period}`).then((r) => r.json()),
       fetch('/api/clickup/projects').then((r) => r.json()),
-    ]).then(([elData, cuData]) => {
-      setSnapshots(elData.snapshots ?? []);
-      setProjects(cuData.tasks ?? []);
+    ]).then(([elResult, cuResult]) => {
+      if (elResult.status === 'fulfilled') setSnapshots(elResult.value.snapshots ?? []);
+      if (cuResult.status === 'fulfilled') setProjects(cuResult.value.tasks ?? []);
     }).catch(() => {}).finally(() => { setLoading(false); setRefreshing(false); });
   }, [period]);
 

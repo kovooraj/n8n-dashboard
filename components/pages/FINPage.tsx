@@ -43,12 +43,12 @@ export function FINPage() {
   const fetchData = useCallback((isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
-    Promise.all([
+    Promise.allSettled([
       fetch(`/api/notion/fin?period=${period}`).then((r) => r.json()),
       fetch('/api/clickup/projects').then((r) => r.json()),
-    ]).then(([finData, cuData]) => {
-      setSnapshots(finData.snapshots ?? []);
-      setProjects(cuData.tasks ?? []);
+    ]).then(([finResult, cuResult]) => {
+      if (finResult.status === 'fulfilled') setSnapshots(finResult.value.snapshots ?? []);
+      if (cuResult.status === 'fulfilled') setProjects(cuResult.value.tasks ?? []);
     }).catch(() => {}).finally(() => { setLoading(false); setRefreshing(false); });
   }, [period]);
 

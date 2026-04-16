@@ -73,16 +73,16 @@ export function OverviewPage() {
   const fetchData = useCallback((isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
-    Promise.all([
+    Promise.allSettled([
       fetch(`/api/notion/n8n?period=${period}`).then((r) => r.json()),
       fetch(`/api/notion/fin?period=${period}`).then((r) => r.json()),
       fetch(`/api/notion/elevenlabs?period=${period}`).then((r) => r.json()),
       fetch('/api/clickup/projects').then((r) => r.json()),
-    ]).then(([n8nData, finData, elData, cuData]) => {
-      setN8nSnapshots(n8nData.snapshots ?? []);
-      setFinSnapshots(finData.snapshots ?? []);
-      setElSnapshots(elData.snapshots ?? []);
-      setProjects(cuData.tasks ?? []);
+    ]).then(([n8nResult, finResult, elResult, cuResult]) => {
+      if (n8nResult.status === 'fulfilled') setN8nSnapshots(n8nResult.value.snapshots ?? []);
+      if (finResult.status === 'fulfilled') setFinSnapshots(finResult.value.snapshots ?? []);
+      if (elResult.status === 'fulfilled') setElSnapshots(elResult.value.snapshots ?? []);
+      if (cuResult.status === 'fulfilled') setProjects(cuResult.value.tasks ?? []);
     }).catch(() => {}).finally(() => { setLoading(false); setRefreshing(false); });
   }, [period]);
 

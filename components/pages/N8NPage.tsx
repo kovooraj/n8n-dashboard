@@ -267,23 +267,28 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
     if (isRefresh) setRefreshing(true);
     else setLiveLoading(true);
     try {
-      const [dashData, cuData] = await Promise.all([
+      const [dashResult, cuResult] = await Promise.allSettled([
         fetch('/api/dashboard').then((r) => r.json()),
         fetch('/api/clickup/projects').then((r) => r.json()),
       ]);
-      const wfHealth: WorkflowHealthData[] = dashData.workflows ?? [];
-      const mapped: SidebarWorkflow[] = wfHealth.map((w) => ({
-        id: w.workflow.id,
-        name: w.workflow.name,
-        health: w.health,
-        successRate: w.successRate != null ? Math.round(w.successRate) : null,
-        lastRunAt: w.lastRunAt,
-        failureCount: w.failureCount,
-        runningCount: w.runningCount,
-        executions: w.executions,
-      }));
-      setLiveWorkflows(mapped);
-      setProjects(cuData.tasks ?? []);
+      if (dashResult.status === 'fulfilled') {
+        const dashData = dashResult.value;
+        const wfHealth: WorkflowHealthData[] = dashData.workflows ?? [];
+        const mapped: SidebarWorkflow[] = wfHealth.map((w) => ({
+          id: w.workflow.id,
+          name: w.workflow.name,
+          health: w.health,
+          successRate: w.successRate != null ? Math.round(w.successRate) : null,
+          lastRunAt: w.lastRunAt,
+          failureCount: w.failureCount,
+          runningCount: w.runningCount,
+          executions: w.executions,
+        }));
+        setLiveWorkflows(mapped);
+      }
+      if (cuResult.status === 'fulfilled') {
+        setProjects(cuResult.value.tasks ?? []);
+      }
     } catch {
       // keep previous data on error
     } finally {
@@ -413,7 +418,7 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
               )}
 
               {/* N8N ClickUp Projects */}
-              {!liveLoading && n8nProjects.length > 0 && (
+              {!liveLoading && (
                 <div style={{ marginTop: 28 }}>
                   <SectionHeader eyebrow="3. AI PROJECTS" title="N8N Workflow Projects" />
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -457,6 +462,11 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
                         </a>
                       );
                     })}
+                    {n8nProjects.length === 0 && (
+                      <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 20, textAlign: 'center' }}>
+                        <p style={{ fontSize: '0.75rem', color: '#6a8870' }}>No n8n-tagged tasks found in ClickUp.</p>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
