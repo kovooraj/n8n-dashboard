@@ -6,8 +6,8 @@ import { PeriodTabs } from '@/components/PeriodTabs';
 import { ProgressMetric } from '@/components/ProgressMetric';
 import { BenchKPICard } from '@/components/BenchKPICard';
 import { RefreshCw } from 'lucide-react';
-import type { DashboardPeriod, N8NSnapshot, FINSnapshot, ElevenLabsSnapshot, ClickUpTask, ChartPoint } from '@/lib/types';
-import { buildSuccessChartData, formatCurrency, formatHours } from '@/lib/chartUtils';
+import type { DashboardPeriod, N8NSnapshot, ClickUpTask, ChartPoint, N8NTotals, FINTotals, ElevenLabsTotals } from '@/lib/types';
+import { buildSuccessFromBuckets, formatCurrency, formatHours } from '@/lib/chartUtils';
 
 const SuccessChart = dynamic(
   () => import('@/components/charts/SuccessChart').then((m) => m.SuccessChart),
@@ -32,10 +32,11 @@ function currentQuarter(): number {
 }
 
 function buildRecs(
-  n8n: N8NSnapshot | null,
-  fin: FINSnapshot | null,
-  el: ElevenLabsSnapshot | null,
-  projects: ClickUpTask[]
+  n8n: N8NTotals | null,
+  fin: FINTotals | null,
+  el: ElevenLabsTotals | null,
+  projects: ClickUpTask[],
+  periodLabel: string,
 ) {
   const inProgress = projects.filter((p) => p.status === 'in progress').length;
   const done = projects.filter((p) => p.status === 'complete').length;
@@ -51,21 +52,26 @@ function buildRecs(
     : `${done} tasks complete, ${scoping} in scoping. Pipeline looks clear — pull new initiatives from the backlog to maintain momentum.`;
 
   const roi = failingCount > 0
-    ? `${failingCount} workflow${failingCount > 1 ? 's are' : ' is'} failing and costing automation hours. Fix these immediately. FIN is resolving ${finRate}% autonomously — target 40%+ by expanding its knowledge base. ElevenLabs is deflecting ${deflection}% of calls — a further 10% improvement would save ~${Math.round(((el?.calls ?? 100) * 0.1 * 39) / 3600)} additional hours/week.`
-    : `All workflows healthy. FIN resolving ${finRate}% of conversations autonomously — increase to 40%+ target by improving FIN knowledge base coverage. ElevenLabs deflecting ${deflection}% of inbound calls. Next ROI lever: raise FIN automation rate to recover ~${Math.round((40 - finRate) * 15)} agent-hours/week.`;
+    ? `${failingCount} workflow${failingCount > 1 ? 's are' : ' is'} failing and costing automation hours. Fix these immediately. FIN is resolving ${finRate}% autonomously — target 40%+ by expanding its knowledge base. ElevenLabs is deflecting ${deflection}% of calls — a further 10% improvement would save ~${Math.round(((el?.calls ?? 100) * 0.1 * 39) / 3600)} additional hours over this ${periodLabel}.`
+    : `All workflows healthy. FIN resolving ${finRate}% of conversations autonomously — increase to 40%+ target by improving FIN knowledge base coverage. ElevenLabs deflecting ${deflection}% of inbound calls. Next ROI lever: raise FIN automation rate to recover ~${Math.round((40 - finRate) * 15)} agent-hours/${periodLabel}.`;
 
   const adoption = totalTriggers > 1000
-    ? `${totalTriggers.toLocaleString()} combined triggers this week across N8N, FIN, and ElevenLabs — strong adoption signal. Identify the ${inProgress > 0 ? inProgress + ' in-progress' : 'remaining'} tools with the lowest trigger volume and run targeted enablement sessions to close the gap.`
-    : `${totalTriggers.toLocaleString()} combined triggers this week. Adoption is building — onboard remaining team members and document use cases to accelerate weekly volume toward the 4,000+ target.`;
+    ? `${totalTriggers.toLocaleString()} combined triggers this ${periodLabel} across N8N, FIN, and ElevenLabs — strong adoption signal. Identify the ${inProgress > 0 ? inProgress + ' in-progress' : 'remaining'} tools with the lowest trigger volume and run targeted enablement sessions to close the gap.`
+    : `${totalTriggers.toLocaleString()} combined triggers this ${periodLabel}. Adoption is building — onboard remaining team members and document use cases to accelerate volume toward targets.`;
 
   return { tracking, roi, adoption };
 }
 
+function periodLabelFor(p: DashboardPeriod): string {
+  return p === 'weekly' ? 'week' : p === 'monthly' ? 'month' : p === 'quarterly' ? 'quarter' : 'year';
+}
+
 export function OverviewPage() {
   const [period, setPeriod] = useState<DashboardPeriod>('weekly');
-  const [n8nSnapshots, setN8nSnapshots] = useState<N8NSnapshot[]>([]);
-  const [finSnapshots, setFinSnapshots] = useState<FINSnapshot[]>([]);
-  const [elSnapshots, setElSnapshots]   = useState<ElevenLabsSnapshot[]>([]);
+  const [n8nBuckets, setN8nBuckets] = useState<N8NSnapshot[]>([]);
+  const [n8nTotals, setN8nTotals] = useState<N8NTotals | null>(null);
+  const [finTotals, setFinTotals] = useState<FINTotals | null>(null);
+  const [elTotals,  setElTotals]  = useState<ElevenLabsTotals | null>(null);
   const [projects, setProjects]         = useState<ClickUpTask[]>([]);
   const [loading, setLoading]           = useState(true);
   const [refreshing, setRefreshing]     = useState(false);
@@ -73,7 +79,6 @@ export function OverviewPage() {
   const fetchData = useCallback((isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
-    // Cache-buster query so any intermediate proxy can't serve stale JSON
     const bust = `_t=${Date.now()}`;
     Promise.allSettled([
       fetch(`/api/notion/n8n?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
@@ -81,15 +86,17 @@ export function OverviewPage() {
       fetch(`/api/notion/elevenlabs?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
       fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
     ]).then(([n8nResult, finResult, elResult, cuResult]) => {
-      if (n8nResult.status === 'fulfilled') setN8nSnapshots(n8nResult.value.snapshots ?? []);
-      if (finResult.status === 'fulfilled') setFinSnapshots(finResult.value.snapshots ?? []);
-      if (elResult.status === 'fulfilled') setElSnapshots(elResult.value.snapshots ?? []);
+      if (n8nResult.status === 'fulfilled') {
+        setN8nBuckets(n8nResult.value.buckets ?? []);
+        setN8nTotals(n8nResult.value.totals ?? null);
+      }
+      if (finResult.status === 'fulfilled') setFinTotals(finResult.value.totals ?? null);
+      if (elResult.status === 'fulfilled') setElTotals(elResult.value.totals ?? null);
       if (cuResult.status === 'fulfilled') {
         const tasks = cuResult.value.tasks ?? [];
         setProjects(tasks);
-        // Diagnostic — visible in DevTools to confirm build is active
         console.log(`[dashboard] ClickUp tasks loaded: ${tasks.length}`, {
-          build: 'v2',
+          build: 'v3',
           period,
           statuses: tasks.reduce((a: Record<string, number>, t: ClickUpTask) => {
             a[t.status] = (a[t.status] ?? 0) + 1;
@@ -104,26 +111,21 @@ export function OverviewPage() {
 
   useEffect(() => { fetchData(false); }, [fetchData]);
 
-  const latestN8N = n8nSnapshots[0] ?? null;
-  const latestFIN = finSnapshots[0] ?? null;
-  const latestEL  = elSnapshots[0] ?? null;
-
-  // ── Combined totals ──────────────────────────────────────────
+  // ── Combined totals for the selected period ──────────────────
   const totalTriggers =
-    (latestN8N?.totalTriggers ?? 1552) +
-    (latestFIN?.finInvolvement ?? 1589) +
-    (latestEL?.calls ?? 1140);
+    (n8nTotals?.totalTriggers ?? 0) +
+    (finTotals?.finInvolvement ?? 0) +
+    (elTotals?.calls ?? 0);
 
-  const totalHours   = (latestN8N?.hoursSaved ?? 43) + (latestFIN?.hoursSaved ?? 74) + (latestEL?.hoursSaved ?? 95);
-  const totalRevenue = (latestN8N?.revenueImpact ?? 2100) + (latestFIN?.revenueImpact ?? 370) + (latestEL?.revenueImpact ?? 475);
-  const activeWorkflows = latestN8N?.activeWorkflows ?? 22;
-  const failingCount    = latestN8N?.failedTriggers ? 3 : 0;
+  const totalHours   = (n8nTotals?.hoursSaved ?? 0) + (finTotals?.hoursSaved ?? 0) + (elTotals?.hoursSaved ?? 0);
+  const totalRevenue = (n8nTotals?.revenueImpact ?? 0) + (finTotals?.revenueImpact ?? 0) + (elTotals?.revenueImpact ?? 0);
+  const activeWorkflows = n8nTotals?.activeWorkflows ?? 0;
+  const failingCount    = n8nTotals?.failedTriggers ?? 0;
 
-  const successRate = latestN8N
-    ? Math.round(((latestN8N.totalTriggers - latestN8N.failedTriggers) / Math.max(1, latestN8N.totalTriggers)) * 100)
-    : 94;
+  const successRate = n8nTotals && n8nTotals.totalTriggers > 0
+    ? Math.round(((n8nTotals.totalTriggers - n8nTotals.failedTriggers) / n8nTotals.totalTriggers) * 100)
+    : 100;
 
-  // Normalize status for robust matching (handles any casing/whitespace drift from ClickUp)
   const norm = (s: string) => s.toLowerCase().trim();
   const backlogProjects    = projects.filter((p) => norm(p.status) === 'to do');
   const scopingProjects    = projects.filter((p) => norm(p.status) === 'planning / scoping');
@@ -131,11 +133,13 @@ export function OverviewPage() {
   const completedProjects  = projects.filter((p) => norm(p.status) === 'complete');
   const highUrgentInProg   = inProgressProjects.filter((p) => p.priority === 'high' || p.priority === 'urgent');
 
-  const chartData: ChartPoint[] = buildSuccessChartData(
-    n8nSnapshots.map((s) => ({ totalTriggers: s.totalTriggers, failedTriggers: s.failedTriggers, weekLabel: s.weekLabel }))
+  const chartData: ChartPoint[] = buildSuccessFromBuckets(
+    n8nBuckets.map((b) => ({ label: b.label ?? b.weekLabel, metrics: { totalTriggers: b.totalTriggers, failedTriggers: b.failedTriggers } })),
+    'totalTriggers',
+    'failedTriggers',
   );
 
-  const recs = buildRecs(latestN8N, latestFIN, latestEL, projects);
+  const recs = buildRecs(n8nTotals, finTotals, elTotals, projects, periodLabelFor(period));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -150,7 +154,7 @@ export function OverviewPage() {
               background: 'rgba(61,186,98,0.08)', border: '1px solid rgba(61,186,98,0.25)',
             }}
           >
-            Build v2 · {loading ? '…' : `${projects.length} tasks`}
+            Build v3 · {loading ? '…' : `${projects.length} tasks · ${period}`}
           </span>
           <button
             onClick={() => fetchData(true)}

@@ -1,31 +1,54 @@
 import type { ChartPoint, VolumePoint } from './types';
 
+/**
+ * Build chart data from period-aligned buckets.
+ * Input buckets are expected chronological OLDEST → NEWEST (as produced by
+ * `aggregate()` in lib/aggregate.ts). Charts render left→right in that order.
+ */
+export function buildSuccessFromBuckets(
+  buckets: Array<{ label: string; metrics: Record<string, number> }>,
+  successKey: string,
+  errorKey: string,
+): ChartPoint[] {
+  return buckets.map((b) => ({
+    label: b.label,
+    success: Math.round(b.metrics[successKey] ?? 0),
+    error: Math.round(b.metrics[errorKey] ?? 0),
+  }));
+}
+
+export function buildVolumeFromBuckets(
+  buckets: Array<{ label: string; metrics: Record<string, number> }>,
+  totalKey: string,
+  resolvedKey: string,
+): VolumePoint[] {
+  return buckets.map((b) => ({
+    label: b.label,
+    total: Math.round(b.metrics[totalKey] ?? 0),
+    resolved: Math.round(b.metrics[resolvedKey] ?? 0),
+  }));
+}
+
+// ── Legacy helpers (still used in a few places) ──────────────────────────────
 const SHORT_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /**
  * Extracts a short readable date label from weekLabel.
  * "Week 16 · Apr 10–16, 2026" → "Apr 10–16"
- * Falls back to "W16" or "W{i+1}" if parsing fails.
+ * If no pattern matches, returns the input string as-is (so short bucket labels
+ * like "Mon 13", "W15", or "Apr" pass through untouched).
  */
 function shortDateLabel(weekLabel: string, fallback: string): string {
-  // Match "Apr 10–16" or "Mar 27 – Apr 2" style after the "·"
   const afterDot = weekLabel.match(/·\s*(.+?)\s*,\s*\d{4}/);
   if (afterDot?.[1]) return afterDot[1].trim();
-  // Fallback: try to match just "Apr 10" (first date)
   const dateOnly = weekLabel.match(/([A-Za-z]{3}\s+\d+)/);
   if (dateOnly?.[1]) return dateOnly[1];
-  return fallback;
+  return weekLabel || fallback;
 }
 
-/**
- * Given an array of (success, error) snapshots ordered newest→oldest,
- * returns ChartPoints for rendering oldest→newest.
- * If only 1 snapshot, generates 7 synthetic daily points ending at snapshot value.
- * maxPoints defaults to the full array length (use the period-limited slice from the API).
- */
 export function buildSuccessChartData(
   snapshots: Array<{ totalTriggers: number; failedTriggers: number; weekLabel: string }>,
-  maxPoints?: number
+  maxPoints?: number,
 ): ChartPoint[] {
   const sliced = snapshots.slice(0, maxPoints ?? snapshots.length).reverse();
 
@@ -51,12 +74,9 @@ export function buildSuccessChartData(
   }));
 }
 
-/**
- * Similar for volume (total + resolved) charts.
- */
 export function buildVolumeChartData(
   snapshots: Array<{ total: number; resolved: number; weekLabel: string }>,
-  maxPoints?: number
+  maxPoints?: number,
 ): VolumePoint[] {
   const sliced = snapshots.slice(0, maxPoints ?? snapshots.length).reverse();
 
@@ -82,9 +102,9 @@ export function buildVolumeChartData(
 
 export function formatCurrency(value: number): string {
   if (value >= 1000) return `$${(value / 1000).toFixed(1)}K`;
-  return `$${value}`;
+  return `$${Math.round(value)}`;
 }
 
 export function formatHours(value: number): string {
-  return `${value}h`;
+  return `${Math.round(value)}h`;
 }

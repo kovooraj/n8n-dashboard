@@ -1,130 +1,152 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { ElevenLabsSnapshot, DashboardPeriod } from '@/lib/types';
+import type { DashboardPeriod } from '@/lib/types';
+import { aggregate, type RawSnapshot, type Bucket, type Granularity } from '@/lib/aggregate';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 const DB_ID = '344bc9ab-b211-8088-9a0d-f8e92d02a1a4';
 
-const MOCK_SNAPSHOTS: ElevenLabsSnapshot[] = [
-  {
-    id: 'mock-el-1',
-    weekLabel: 'Week 16 · Apr 10–16, 2026',
-    calls: 1140,
-    avgDuration: 39,
-    transferRate: 49.3,
-    agents: 3,
-    hoursSaved: 95,
-    revenueImpact: 475,
-  },
-  {
-    id: 'mock-el-2',
-    weekLabel: 'Week 15 · Apr 3–9, 2026',
-    calls: 1082,
-    avgDuration: 41,
-    transferRate: 51.2,
-    agents: 3,
-    hoursSaved: 90,
-    revenueImpact: 450,
-  },
-  {
-    id: 'mock-el-3',
-    weekLabel: 'Week 14 · Mar 27 – Apr 2, 2026',
-    calls: 1021,
-    avgDuration: 38,
-    transferRate: 52.8,
-    agents: 3,
-    hoursSaved: 85,
-    revenueImpact: 425,
-  },
-  {
-    id: 'mock-el-4',
-    weekLabel: 'Week 13 · Mar 20–26, 2026',
-    calls: 968,
-    avgDuration: 40,
-    transferRate: 54.1,
-    agents: 3,
-    hoursSaved: 80,
-    revenueImpact: 400,
-  },
-  {
-    id: 'mock-el-5',
-    weekLabel: 'Week 12 · Mar 13–19, 2026',
-    calls: 912,
-    avgDuration: 42,
-    transferRate: 55.4,
-    agents: 3,
-    hoursSaved: 76,
-    revenueImpact: 380,
-  },
-  {
-    id: 'mock-el-6',
-    weekLabel: 'Week 11 · Mar 6–12, 2026',
-    calls: 870,
-    avgDuration: 39,
-    transferRate: 56.0,
-    agents: 2,
-    hoursSaved: 72,
-    revenueImpact: 360,
-  },
-  {
-    id: 'mock-el-7',
-    weekLabel: 'Week 10 · Feb 27 – Mar 5, 2026',
-    calls: 824,
-    avgDuration: 43,
-    transferRate: 57.3,
-    agents: 2,
-    hoursSaved: 68,
-    revenueImpact: 340,
-  },
-];
+const AGG_RULES = {
+  calls: 'sum',
+  avgDuration: 'avg',
+  transferRate: 'avg',
+  agents: 'last',
+  csat: 'avg',
+  hoursSaved: 'sum',
+  revenueImpact: 'sum',
+} as const;
+
+function mockSnapshots(now: Date = new Date()): RawSnapshot[] {
+  const out: RawSnapshot[] = [];
+  for (let i = 0; i < 30; i++) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i));
+    const iso = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    out.push({
+      date: iso,
+      metrics: {
+        calls: 150 + (i % 7) * 30,
+        avgDuration: 35 + (i % 5) * 3,
+        transferRate: 49 + (i % 5),
+        agents: 3,
+        csat: 0,
+        hoursSaved: 13 + (i % 3),
+        revenueImpact: 65 + (i % 3) * 10,
+      },
+    });
+  }
+  return out;
+}
+
+interface BucketPayload {
+  id: string;
+  weekLabel: string;
+  label: string;
+  start: string;
+  end: string;
+  count: number;
+  calls: number;
+  avgDuration: number;
+  transferRate: number;
+  agents: number;
+  csat: number;
+  hoursSaved: number;
+  revenueImpact: number;
+}
+
+function payloadFromBuckets(buckets: Bucket[]): BucketPayload[] {
+  return buckets.map((b) => ({
+    id: b.id,
+    weekLabel: b.longLabel,
+    label: b.label,
+    start: b.start,
+    end: b.end,
+    count: b.count,
+    calls: Math.round(b.metrics.calls ?? 0),
+    avgDuration: Number((b.metrics.avgDuration ?? 0).toFixed(1)),
+    transferRate: Number((b.metrics.transferRate ?? 0).toFixed(1)),
+    agents: Math.round(b.metrics.agents ?? 0),
+    csat: Number((b.metrics.csat ?? 0).toFixed(1)),
+    hoursSaved: b.metrics.hoursSaved ?? 0,
+    revenueImpact: b.metrics.revenueImpact ?? 0,
+  }));
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const period = (searchParams.get('period') ?? 'weekly') as DashboardPeriod;
+  const now = new Date();
 
   const token = process.env.NOTION_TOKEN;
   if (!token) {
-    const limit =
-      period === 'weekly' ? 7
-      : period === 'monthly' ? 4
-      : period === 'quarterly' ? 13
-      : 52;
-    return NextResponse.json({ snapshots: MOCK_SNAPSHOTS.slice(0, limit), mock: true });
+    const raw = mockSnapshots(now);
+    const { buckets, totals, granularity } = aggregate(raw, period, AGG_RULES, now);
+    return mkResponse(buckets, totals, granularity, true);
   }
 
   try {
-    const { queryDatabase, getNumber, getText, getFormula } = await import('@/lib/notion');
-
-    const limit =
-      period === 'weekly' ? 7
-      : period === 'monthly' ? 4
-      : period === 'quarterly' ? 13
-      : 52;
-
+    const { queryDatabase, getNumber, getFormula, getDate } = await import('@/lib/notion');
     const rows = await queryDatabase(
       DB_ID,
       undefined,
-      [{ property: 'Week Number', direction: 'descending' }]
+      [{ property: 'Week Start Date', direction: 'descending' }],
     );
 
-    const snapshots: ElevenLabsSnapshot[] = rows.slice(0, limit).map((row) => ({
-      id: (row.id as string) ?? '',
-      weekLabel: getText(row, 'Week Label'),
-      calls: getNumber(row, 'ElevenLabs Calls'),
-      avgDuration: getNumber(row, 'ElevenLabs Average Call Duration'),
-      transferRate: getNumber(row, 'Transfer to live agent %'),
-      agents: getNumber(row, 'Active ElevenLabs Agents'),
-      hoursSaved: getFormula(row, 'Total Hours Saved'),
-      revenueImpact: getFormula(row, 'Total Revenue Impact'),
-    }));
+    const raw: RawSnapshot[] = rows
+      .map((row) => {
+        const date = getDate(row, 'Week Start Date');
+        if (!date) return null;
+        return {
+          date,
+          metrics: {
+            calls: getNumber(row, 'ElevenLabs Calls'),
+            avgDuration: getNumber(row, 'ElevenLabs Average Call Duration'),
+            transferRate: getNumber(row, 'Transfer to live agent %'),
+            agents: getNumber(row, 'Active ElevenLabs Agents'),
+            csat: getNumber(row, 'CSAT'),
+            hoursSaved: getFormula(row, 'Total Hours Saved'),
+            revenueImpact: getFormula(row, 'Total Revenue Impact'),
+          },
+        } as RawSnapshot;
+      })
+      .filter((r): r is RawSnapshot => r !== null);
 
-    return NextResponse.json({ snapshots, mock: false });
+    const { buckets, totals, granularity } = aggregate(raw, period, AGG_RULES, now);
+    return mkResponse(buckets, totals, granularity, false);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json(
-      { snapshots: MOCK_SNAPSHOTS, mock: true, error: message },
-      { status: 200 }
-    );
+    const raw = mockSnapshots(now);
+    const { buckets, totals, granularity } = aggregate(raw, period, AGG_RULES, now);
+    return mkResponse(buckets, totals, granularity, true, message);
   }
+}
+
+function mkResponse(
+  buckets: Bucket[],
+  totals: Record<string, number>,
+  granularity: Granularity,
+  mock: boolean,
+  error?: string,
+) {
+  const bucketPayload = payloadFromBuckets(buckets);
+  const snapshots = [...bucketPayload].reverse();
+  const body = {
+    snapshots,
+    buckets: bucketPayload,
+    totals: {
+      calls: Math.round(totals.calls ?? 0),
+      avgDuration: Number((totals.avgDuration ?? 0).toFixed(1)),
+      transferRate: Number((totals.transferRate ?? 0).toFixed(1)),
+      agents: Math.round(totals.agents ?? 0),
+      csat: Number((totals.csat ?? 0).toFixed(1)),
+      hoursSaved: totals.hoursSaved ?? 0,
+      revenueImpact: totals.revenueImpact ?? 0,
+    },
+    granularity,
+    mock,
+    ...(error ? { error } : {}),
+  };
+  return NextResponse.json(body, {
+    headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+  });
 }

@@ -71,6 +71,13 @@ export function getSelect(page: Record<string, unknown>, key: string): string {
   return sel?.name ?? '';
 }
 
+export function getDate(page: Record<string, unknown>, key: string): string | null {
+  const prop = getProp(page, key);
+  if (!prop) return null;
+  const d = prop.date as { start?: string; end?: string } | null;
+  return d?.start ?? null;
+}
+
 export function getFormula(page: Record<string, unknown>, key: string): number {
   const prop = getProp(page, key);
   if (!prop) return 0;

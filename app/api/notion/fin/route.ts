@@ -1,130 +1,158 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { FINSnapshot, DashboardPeriod } from '@/lib/types';
+import type { DashboardPeriod } from '@/lib/types';
+import { aggregate, type RawSnapshot, type Bucket, type Granularity } from '@/lib/aggregate';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 const DB_ID = '344bc9ab-b211-8078-848d-e21dfb052948';
 
-const MOCK_SNAPSHOTS: FINSnapshot[] = [
-  {
-    id: 'mock-fin-1',
-    weekLabel: 'Week 16 · Apr 10–16, 2026',
-    finInvolvement: 1589,
-    finResolved: 445,
-    finAutomationRate: 28,
-    csat: 78.1,
-    hoursSaved: 74,
-    revenueImpact: 370,
-  },
-  {
-    id: 'mock-fin-2',
-    weekLabel: 'Week 15 · Apr 3–9, 2026',
-    finInvolvement: 1501,
-    finResolved: 390,
-    finAutomationRate: 26,
-    csat: 76.5,
-    hoursSaved: 68,
-    revenueImpact: 340,
-  },
-  {
-    id: 'mock-fin-3',
-    weekLabel: 'Week 14 · Mar 27 – Apr 2, 2026',
-    finInvolvement: 1420,
-    finResolved: 355,
-    finAutomationRate: 25,
-    csat: 75.0,
-    hoursSaved: 62,
-    revenueImpact: 310,
-  },
-  {
-    id: 'mock-fin-4',
-    weekLabel: 'Week 13 · Mar 20–26, 2026',
-    finInvolvement: 1360,
-    finResolved: 326,
-    finAutomationRate: 24,
-    csat: 74.2,
-    hoursSaved: 58,
-    revenueImpact: 290,
-  },
-  {
-    id: 'mock-fin-5',
-    weekLabel: 'Week 12 · Mar 13–19, 2026',
-    finInvolvement: 1298,
-    finResolved: 299,
-    finAutomationRate: 23,
-    csat: 73.8,
-    hoursSaved: 54,
-    revenueImpact: 270,
-  },
-  {
-    id: 'mock-fin-6',
-    weekLabel: 'Week 11 · Mar 6–12, 2026',
-    finInvolvement: 1241,
-    finResolved: 272,
-    finAutomationRate: 22,
-    csat: 73.1,
-    hoursSaved: 50,
-    revenueImpact: 250,
-  },
-  {
-    id: 'mock-fin-7',
-    weekLabel: 'Week 10 · Feb 27 – Mar 5, 2026',
-    finInvolvement: 1180,
-    finResolved: 248,
-    finAutomationRate: 21,
-    csat: 72.5,
-    hoursSaved: 46,
-    revenueImpact: 230,
-  },
-];
+const AGG_RULES = {
+  finInvolvement: 'sum',
+  finResolved: 'sum',
+  finAutomationRate: 'avg',
+  csat: 'avg',
+  finProcedureUses: 'sum',
+  activeFinProcedures: 'last',
+  hoursSaved: 'sum',
+  revenueImpact: 'sum',
+} as const;
+
+function mockSnapshots(now: Date = new Date()): RawSnapshot[] {
+  const out: RawSnapshot[] = [];
+  for (let i = 0; i < 30; i++) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i));
+    const iso = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    out.push({
+      date: iso,
+      metrics: {
+        finInvolvement: 200 + (i % 7) * 30,
+        finResolved: 60 + (i % 7) * 10,
+        finAutomationRate: 28 + (i % 5),
+        csat: 78 + (i % 4),
+        finProcedureUses: 15 + (i % 5),
+        activeFinProcedures: 12,
+        hoursSaved: 10 + (i % 3),
+        revenueImpact: 50 + (i % 3) * 10,
+      },
+    });
+  }
+  return out;
+}
+
+interface BucketPayload {
+  id: string;
+  weekLabel: string;
+  label: string;
+  start: string;
+  end: string;
+  count: number;
+  finInvolvement: number;
+  finResolved: number;
+  finAutomationRate: number;
+  csat: number;
+  finProcedureUses: number;
+  activeFinProcedures: number;
+  hoursSaved: number;
+  revenueImpact: number;
+}
+
+function payloadFromBuckets(buckets: Bucket[]): BucketPayload[] {
+  return buckets.map((b) => ({
+    id: b.id,
+    weekLabel: b.longLabel,
+    label: b.label,
+    start: b.start,
+    end: b.end,
+    count: b.count,
+    finInvolvement: Math.round(b.metrics.finInvolvement ?? 0),
+    finResolved: Math.round(b.metrics.finResolved ?? 0),
+    finAutomationRate: Number((b.metrics.finAutomationRate ?? 0).toFixed(1)),
+    csat: Number((b.metrics.csat ?? 0).toFixed(1)),
+    finProcedureUses: Math.round(b.metrics.finProcedureUses ?? 0),
+    activeFinProcedures: Math.round(b.metrics.activeFinProcedures ?? 0),
+    hoursSaved: b.metrics.hoursSaved ?? 0,
+    revenueImpact: b.metrics.revenueImpact ?? 0,
+  }));
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const period = (searchParams.get('period') ?? 'weekly') as DashboardPeriod;
+  const now = new Date();
 
   const token = process.env.NOTION_TOKEN;
   if (!token) {
-    const limit =
-      period === 'weekly' ? 7
-      : period === 'monthly' ? 4
-      : period === 'quarterly' ? 13
-      : 52;
-    return NextResponse.json({ snapshots: MOCK_SNAPSHOTS.slice(0, limit), mock: true });
+    const raw = mockSnapshots(now);
+    const { buckets, totals, granularity } = aggregate(raw, period, AGG_RULES, now);
+    return mkResponse(buckets, totals, granularity, true);
   }
 
   try {
-    const { queryDatabase, getNumber, getText, getFormula } = await import('@/lib/notion');
-
-    const limit =
-      period === 'weekly' ? 7
-      : period === 'monthly' ? 4
-      : period === 'quarterly' ? 13
-      : 52;
-
+    const { queryDatabase, getNumber, getFormula, getDate } = await import('@/lib/notion');
     const rows = await queryDatabase(
       DB_ID,
       undefined,
-      [{ property: 'Week Number', direction: 'descending' }]
+      [{ property: 'Week Start Date', direction: 'descending' }],
     );
 
-    const snapshots: FINSnapshot[] = rows.slice(0, limit).map((row) => ({
-      id: (row.id as string) ?? '',
-      weekLabel: getText(row, 'Week Label'),
-      finInvolvement: getNumber(row, 'Fin Involvement'),
-      finResolved: getNumber(row, 'FIN Resolved'),
-      finAutomationRate: getNumber(row, 'Fin Automation Rate'),
-      csat: getNumber(row, 'CSAT'),
-      hoursSaved: getFormula(row, 'Total Hours Saved'),
-      revenueImpact: getFormula(row, 'Total Revenue Impact'),
-    }));
+    const raw: RawSnapshot[] = rows
+      .map((row) => {
+        const date = getDate(row, 'Week Start Date');
+        if (!date) return null;
+        return {
+          date,
+          metrics: {
+            finInvolvement: getNumber(row, 'Fin Involvement'),
+            finResolved: getNumber(row, 'FIN Resolved'),
+            finAutomationRate: getNumber(row, 'Fin Automation Rate'),
+            csat: getNumber(row, 'CSAT'),
+            finProcedureUses: getNumber(row, 'Fin Procedure Uses'),
+            activeFinProcedures: getNumber(row, 'Active Fin Procedures'),
+            hoursSaved: getFormula(row, 'Total Hours Saved'),
+            revenueImpact: getFormula(row, 'Total Revenue Impact'),
+          },
+        } as RawSnapshot;
+      })
+      .filter((r): r is RawSnapshot => r !== null);
 
-    return NextResponse.json({ snapshots, mock: false });
+    const { buckets, totals, granularity } = aggregate(raw, period, AGG_RULES, now);
+    return mkResponse(buckets, totals, granularity, false);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json(
-      { snapshots: MOCK_SNAPSHOTS, mock: true, error: message },
-      { status: 200 }
-    );
+    const raw = mockSnapshots(now);
+    const { buckets, totals, granularity } = aggregate(raw, period, AGG_RULES, now);
+    return mkResponse(buckets, totals, granularity, true, message);
   }
+}
+
+function mkResponse(
+  buckets: Bucket[],
+  totals: Record<string, number>,
+  granularity: Granularity,
+  mock: boolean,
+  error?: string,
+) {
+  const bucketPayload = payloadFromBuckets(buckets);
+  const snapshots = [...bucketPayload].reverse();
+  const body = {
+    snapshots,
+    buckets: bucketPayload,
+    totals: {
+      finInvolvement: Math.round(totals.finInvolvement ?? 0),
+      finResolved: Math.round(totals.finResolved ?? 0),
+      finAutomationRate: Number((totals.finAutomationRate ?? 0).toFixed(1)),
+      csat: Number((totals.csat ?? 0).toFixed(1)),
+      finProcedureUses: Math.round(totals.finProcedureUses ?? 0),
+      activeFinProcedures: Math.round(totals.activeFinProcedures ?? 0),
+      hoursSaved: totals.hoursSaved ?? 0,
+      revenueImpact: totals.revenueImpact ?? 0,
+    },
+    granularity,
+    mock,
+    ...(error ? { error } : {}),
+  };
+  return NextResponse.json(body, {
+    headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+  });
 }

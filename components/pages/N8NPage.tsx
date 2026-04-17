@@ -7,8 +7,8 @@ import { PeriodTabs } from '@/components/PeriodTabs';
 import { ProgressMetric } from '@/components/ProgressMetric';
 import { BenchKPICard } from '@/components/BenchKPICard';
 import { AutomationWorkflowSidebar } from '@/components/AutomationWorkflowSidebar';
-import type { DashboardPeriod, N8NSnapshot, SidebarWorkflow, ChartPoint, ClickUpTask, WorkflowHealthData, N8nExecution } from '@/lib/types';
-import { buildSuccessChartData, formatCurrency, formatHours } from '@/lib/chartUtils';
+import type { DashboardPeriod, N8NSnapshot, N8NTotals, SidebarWorkflow, ChartPoint, ClickUpTask, WorkflowHealthData, N8nExecution } from '@/lib/types';
+import { buildSuccessFromBuckets, formatCurrency, formatHours } from '@/lib/chartUtils';
 
 const N8N_BASE_URL = 'https://n8n.sinaprinting.com';
 
@@ -245,7 +245,8 @@ interface N8NPageProps {
 
 export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
   const [period, setPeriod] = useState<DashboardPeriod>('weekly');
-  const [snapshots, setSnapshots] = useState<N8NSnapshot[]>([]);
+  const [buckets, setBuckets] = useState<N8NSnapshot[]>([]);
+  const [totals, setTotals] = useState<N8NTotals | null>(null);
   const [liveWorkflows, setLiveWorkflows] = useState<SidebarWorkflow[]>([]);
   const [projects, setProjects] = useState<ClickUpTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -253,12 +254,16 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null); // null = overview
 
-  // Fetch Notion snapshots for the chart
+  // Fetch Notion period buckets + totals for the chart/KPIs
   useEffect(() => {
     setLoading(true);
     fetch(`/api/notion/n8n?period=${period}&_t=${Date.now()}`, { cache: 'no-store' })
       .then((r) => r.json())
-      .then((data) => { setSnapshots(data.snapshots ?? []); setLoading(false); })
+      .then((data) => {
+        setBuckets(data.buckets ?? []);
+        setTotals(data.totals ?? null);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
   }, [period]);
 
@@ -305,13 +310,14 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
   useEffect(() => { fetchLive(false); }, [fetchLive]);
 
   const workflows = sidebarWorkflows ?? liveWorkflows;
-  const latest = snapshots[0];
-  const successRate = latest
-    ? Math.round(((latest.totalTriggers - latest.failedTriggers) / Math.max(1, latest.totalTriggers)) * 100)
-    : 94;
+  const successRate = totals && totals.totalTriggers > 0
+    ? Math.round(((totals.totalTriggers - totals.failedTriggers) / totals.totalTriggers) * 100)
+    : 100;
 
-  const chartData: ChartPoint[] = buildSuccessChartData(
-    snapshots.map((s) => ({ totalTriggers: s.totalTriggers, failedTriggers: s.failedTriggers, weekLabel: s.weekLabel }))
+  const chartData: ChartPoint[] = buildSuccessFromBuckets(
+    buckets.map((b) => ({ label: b.label ?? b.weekLabel, metrics: { totalTriggers: b.totalTriggers, failedTriggers: b.failedTriggers } })),
+    'totalTriggers',
+    'failedTriggers',
   );
 
   const selectedWorkflow = selectedId ? workflows.find((w) => w.id === selectedId) ?? null : null;
@@ -328,7 +334,7 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
         <div style={{ padding: '0 24px', flexShrink: 0, paddingTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <PeriodTabs active={period} onChange={setPeriod} />
           <button
-            onClick={() => { fetchLive(true); setLoading(true); fetch(`/api/notion/n8n?period=${period}`).then(r => r.json()).then(d => { setSnapshots(d.snapshots ?? []); setLoading(false); }).catch(() => setLoading(false)); }}
+            onClick={() => { fetchLive(true); setLoading(true); fetch(`/api/notion/n8n?period=${period}&_t=${Date.now()}`, { cache: 'no-store' }).then(r => r.json()).then(d => { setBuckets(d.buckets ?? []); setTotals(d.totals ?? null); setLoading(false); }).catch(() => setLoading(false)); }}
             disabled={refreshing}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
@@ -358,22 +364,22 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
                 <BenchKPICard
                   label="Total Automation Triggers"
-                  value={loading ? '—' : (latest?.totalTriggers != null ? latest.totalTriggers.toLocaleString() : '—')}
+                  value={loading ? '—' : (totals?.totalTriggers ?? 0).toLocaleString()}
                   showInfo
                 />
                 <BenchKPICard
                   label="Estimated Hours Saved"
-                  value={loading ? '—' : formatHours(latest?.hoursSaved ?? 0)}
+                  value={loading ? '—' : formatHours(totals?.hoursSaved ?? 0)}
                   showInfo
                 />
                 <BenchKPICard
                   label="Estimated Revenue Impact"
-                  value={loading ? '—' : formatCurrency(latest?.revenueImpact ?? 0)}
+                  value={loading ? '—' : formatCurrency(totals?.revenueImpact ?? 0)}
                   showInfo
                 />
                 <BenchKPICard
                   label="Workflows Active"
-                  value={liveLoading ? '—' : (latest?.activeWorkflows ?? workflows.length)}
+                  value={liveLoading ? '—' : (totals?.activeWorkflows ?? workflows.length)}
                   showInfo
                   subBadge={
                     <span style={{ fontSize: '0.65rem', color: '#6a8870', display: 'flex', alignItems: 'center', gap: 4 }}>

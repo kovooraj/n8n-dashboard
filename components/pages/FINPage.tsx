@@ -6,8 +6,8 @@ import { RefreshCw } from 'lucide-react';
 import { PeriodTabs } from '@/components/PeriodTabs';
 import { ProgressMetric } from '@/components/ProgressMetric';
 import { BenchKPICard } from '@/components/BenchKPICard';
-import type { DashboardPeriod, FINSnapshot, ClickUpTask } from '@/lib/types';
-import { buildVolumeChartData, formatCurrency, formatHours } from '@/lib/chartUtils';
+import type { DashboardPeriod, FINSnapshot, FINTotals, ClickUpTask } from '@/lib/types';
+import { buildVolumeFromBuckets, formatCurrency, formatHours } from '@/lib/chartUtils';
 import type { VolumePoint } from '@/lib/types';
 
 const VolumeChart = dynamic(
@@ -35,7 +35,8 @@ const STATUS_COLORS: Record<string, string> = {
 
 export function FINPage() {
   const [period, setPeriod] = useState<DashboardPeriod>('weekly');
-  const [snapshots, setSnapshots] = useState<FINSnapshot[]>([]);
+  const [buckets, setBuckets] = useState<FINSnapshot[]>([]);
+  const [totals, setTotals] = useState<FINTotals | null>(null);
   const [projects, setProjects] = useState<ClickUpTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -43,27 +44,29 @@ export function FINPage() {
   const fetchData = useCallback((isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
+    const bust = `_t=${Date.now()}`;
     Promise.allSettled([
-      fetch(`/api/notion/fin?period=${period}`).then((r) => r.json()),
-      fetch('/api/clickup/projects').then((r) => r.json()),
+      fetch(`/api/notion/fin?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
     ]).then(([finResult, cuResult]) => {
-      if (finResult.status === 'fulfilled') setSnapshots(finResult.value.snapshots ?? []);
+      if (finResult.status === 'fulfilled') {
+        setBuckets(finResult.value.buckets ?? []);
+        setTotals(finResult.value.totals ?? null);
+      }
       if (cuResult.status === 'fulfilled') setProjects(cuResult.value.tasks ?? []);
     }).catch(() => {}).finally(() => { setLoading(false); setRefreshing(false); });
   }, [period]);
 
   useEffect(() => { fetchData(false); }, [fetchData]);
 
-  const latest = snapshots[0];
-  const chartData: VolumePoint[] = buildVolumeChartData(
-    snapshots.map((s) => ({
-      total: s.finInvolvement,
-      resolved: s.finResolved,
-      weekLabel: s.weekLabel,
-    }))
+  const chartData: VolumePoint[] = buildVolumeFromBuckets(
+    buckets.map((b) => ({ label: b.label ?? b.weekLabel, metrics: { total: b.finInvolvement, resolved: b.finResolved } })),
+    'total',
+    'resolved',
   );
 
-  const resolutionRate = latest?.finAutomationRate ?? 28;
+  const resolutionRate = totals?.finAutomationRate ?? 0;
+  const escalatedCount = totals ? Math.max(0, totals.finInvolvement - totals.finResolved) : 0;
 
   const finProjects = projects.filter((p) => p.platform === 'fin');
 
@@ -105,22 +108,22 @@ export function FINPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
           <BenchKPICard
             label="Conversations"
-            value={loading ? '—' : (latest?.finInvolvement ?? 1589).toLocaleString()}
+            value={loading ? '—' : (totals?.finInvolvement ?? 0).toLocaleString()}
             showInfo
           />
           <BenchKPICard
             label="Estimated Hours Saved"
-            value={loading ? '—' : formatHours(latest?.hoursSaved ?? 74)}
+            value={loading ? '—' : formatHours(totals?.hoursSaved ?? 0)}
             showInfo
           />
           <BenchKPICard
             label="Estimated Revenue Impact"
-            value={loading ? '—' : formatCurrency(latest?.revenueImpact ?? 370)}
+            value={loading ? '—' : formatCurrency(totals?.revenueImpact ?? 0)}
             showInfo
           />
           <BenchKPICard
             label="CSAT Score"
-            value={loading ? '—' : `${latest?.csat ?? 78.1}%`}
+            value={loading ? '—' : `${totals?.csat ?? 0}%`}
             showInfo
           />
         </div>
@@ -140,15 +143,15 @@ export function FINPage() {
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
             {[
               {
-                action: `Raise FIN resolution rate from ${loading ? 28 : (latest?.finAutomationRate ?? 28)}% → 40%+`,
-                detail: 'Audit the top 20 unresolved conversation topics and add targeted Fin Guidance rules for each. A 12-point gain saves ~50 additional agent-hours/week.',
+                action: `Raise FIN resolution rate from ${loading ? 0 : resolutionRate}% → 40%+`,
+                detail: 'Audit the top 20 unresolved conversation topics and add targeted Fin Guidance rules for each. A 12-point gain saves ~50 additional agent-hours over this period.',
               },
               {
                 action: 'Reduce escalation rate on billing & account queries',
-                detail: `${loading ? 856 : Math.round(((1 - (latest?.finAutomationRate ?? 28) / 100) * (latest?.finInvolvement ?? 1589)))} conversations escalated to agents this week. Map common billing intent patterns and add FIN procedures to handle order status, invoice questions, and refund eligibility autonomously.`,
+                detail: `${loading ? 0 : escalatedCount.toLocaleString()} conversations escalated to agents this period. Map common billing intent patterns and add FIN procedures to handle order status, invoice questions, and refund eligibility autonomously.`,
               },
               {
-                action: `Push CSAT from ${loading ? 78.1 : (latest?.csat ?? 78.1)}% toward 85%`,
+                action: `Push CSAT from ${loading ? 0 : (totals?.csat ?? 0)}% toward 85%`,
                 detail: 'Review negative-rated conversations for response latency outliers. Enable follow-up messaging for high-volume topic clusters where response time exceeds 2 seconds.',
               },
               {

@@ -6,8 +6,8 @@ import { RefreshCw } from 'lucide-react';
 import { PeriodTabs } from '@/components/PeriodTabs';
 import { ProgressMetric } from '@/components/ProgressMetric';
 import { BenchKPICard } from '@/components/BenchKPICard';
-import type { DashboardPeriod, ElevenLabsSnapshot, ClickUpTask } from '@/lib/types';
-import { buildVolumeChartData, formatCurrency, formatHours } from '@/lib/chartUtils';
+import type { DashboardPeriod, ElevenLabsSnapshot, ElevenLabsTotals, ClickUpTask } from '@/lib/types';
+import { buildVolumeFromBuckets, formatCurrency, formatHours } from '@/lib/chartUtils';
 import type { VolumePoint } from '@/lib/types';
 
 const VolumeChart = dynamic(
@@ -35,7 +35,8 @@ const STATUS_COLORS: Record<string, string> = {
 
 export function ElevenLabsPage() {
   const [period, setPeriod] = useState<DashboardPeriod>('weekly');
-  const [snapshots, setSnapshots] = useState<ElevenLabsSnapshot[]>([]);
+  const [buckets, setBuckets] = useState<ElevenLabsSnapshot[]>([]);
+  const [totals, setTotals] = useState<ElevenLabsTotals | null>(null);
   const [projects, setProjects] = useState<ClickUpTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -43,26 +44,35 @@ export function ElevenLabsPage() {
   const fetchData = useCallback((isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
+    const bust = `_t=${Date.now()}`;
     Promise.allSettled([
-      fetch(`/api/notion/elevenlabs?period=${period}`).then((r) => r.json()),
-      fetch('/api/clickup/projects').then((r) => r.json()),
+      fetch(`/api/notion/elevenlabs?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
     ]).then(([elResult, cuResult]) => {
-      if (elResult.status === 'fulfilled') setSnapshots(elResult.value.snapshots ?? []);
+      if (elResult.status === 'fulfilled') {
+        setBuckets(elResult.value.buckets ?? []);
+        setTotals(elResult.value.totals ?? null);
+      }
       if (cuResult.status === 'fulfilled') setProjects(cuResult.value.tasks ?? []);
     }).catch(() => {}).finally(() => { setLoading(false); setRefreshing(false); });
   }, [period]);
 
   useEffect(() => { fetchData(false); }, [fetchData]);
 
-  const latest = snapshots[0];
-  const deflectionRate = latest ? Math.round(100 - latest.transferRate) : 50.7;
+  const deflectionRate = totals ? Number((100 - totals.transferRate).toFixed(1)) : 0;
+  const transferredCount = totals ? Math.round(totals.calls * (totals.transferRate / 100)) : 0;
 
-  const chartData: VolumePoint[] = buildVolumeChartData(
-    snapshots.map((s) => ({
-      total: s.calls,
-      resolved: Math.round(s.calls * (1 - s.transferRate / 100)),
-      weekLabel: s.weekLabel,
-    }))
+  // Volume chart: total calls vs deflected (calls - transferred) per bucket
+  const chartData: VolumePoint[] = buildVolumeFromBuckets(
+    buckets.map((b) => ({
+      label: b.label ?? b.weekLabel,
+      metrics: {
+        total: b.calls,
+        resolved: Math.round(b.calls * (1 - b.transferRate / 100)),
+      },
+    })),
+    'total',
+    'resolved',
   );
 
   const callProjects = projects.filter((p) => p.platform === 'elevenlabs');
@@ -105,27 +115,27 @@ export function ElevenLabsPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
           <BenchKPICard
             label="Total # of Calls"
-            value={loading ? '—' : (latest?.calls ?? 1140).toLocaleString()}
+            value={loading ? '—' : (totals?.calls ?? 0).toLocaleString()}
             showInfo
           />
           <BenchKPICard
             label="Transferred to Live Agent"
-            value={loading ? '—' : `${latest?.transferRate ?? 49.3}%`}
+            value={loading ? '—' : `${totals?.transferRate ?? 0}%`}
             showInfo
           />
           <BenchKPICard
             label="Estimated Hours Saved"
-            value={loading ? '—' : formatHours(latest?.hoursSaved ?? 95)}
+            value={loading ? '—' : formatHours(totals?.hoursSaved ?? 0)}
             showInfo
           />
           <BenchKPICard
             label="Estimated Revenue Impact"
-            value={loading ? '—' : formatCurrency(latest?.revenueImpact ?? 475)}
+            value={loading ? '—' : formatCurrency(totals?.revenueImpact ?? 0)}
             showInfo
           />
           <BenchKPICard
             label="CSAT Score"
-            value="N/A"
+            value={loading ? '—' : (totals && totals.csat > 0 ? `${totals.csat}%` : 'N/A')}
             showInfo
           />
         </div>
@@ -145,11 +155,11 @@ export function ElevenLabsPage() {
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
             {[
               {
-                action: `Raise deflection rate from ${loading ? 50.7 : deflectionRate.toFixed(1)}% → 65%+`,
-                detail: `${loading ? 561 : Math.round((latest?.calls ?? 1140) * ((latest?.transferRate ?? 49.3) / 100))} calls transferred to live agents this week. Analyse the top 10 transfer reasons and add targeted agent responses for each — a 15-point deflection gain saves ~${Math.round(((latest?.calls ?? 1140) * 0.15 * (latest?.avgDuration ?? 39)) / 3600)} additional agent-hours/week.`,
+                action: `Raise deflection rate from ${loading ? 0 : deflectionRate}% → 65%+`,
+                detail: `${loading ? 0 : transferredCount.toLocaleString()} calls transferred to live agents this period. Analyse the top 10 transfer reasons and add targeted agent responses for each — a 15-point deflection gain saves ~${loading ? 0 : Math.round(((totals?.calls ?? 0) * 0.15 * (totals?.avgDuration ?? 0)) / 3600)} additional agent-hours over this period.`,
               },
               {
-                action: `Reduce average call duration from ${loading ? 39 : (latest?.avgDuration ?? 39)}s`,
+                action: `Reduce average call duration from ${loading ? 0 : (totals?.avgDuration ?? 0)}s`,
                 detail: 'Calls averaging 39 seconds suggests agents are not resolving intent in the first turn. Review conversation transcripts for ambiguous opening prompts and tighten the greeting + intent-detection logic.',
               },
               {
