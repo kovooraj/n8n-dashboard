@@ -2,6 +2,47 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { DashboardPeriod } from '@/lib/types';
 import { aggregate, type RawSnapshot, type Bucket, type Granularity } from '@/lib/aggregate';
 
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function isoWeekNumber(d: Date): number {
+  const target = new Date(d);
+  target.setUTCDate(target.getUTCDate() + 4 - (target.getUTCDay() || 7));
+  const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
+  const diff = (target.getTime() - firstThursday.getTime()) / 86400000;
+  return 1 + Math.floor(diff / 7);
+}
+
+/**
+ * Build a single-week bucket from the most recent weekly source row.
+ * Used for the weekly period because N8N Notion rows are weekly-granular;
+ * sub-bucketing a weekly row into 7 daily buckets would show 6 empty days.
+ */
+function singleWeekBucket(raw: RawSnapshot[]): Bucket | null {
+  if (raw.length === 0) return null;
+  const mostRecent = raw[0];
+  const [y, m, d] = mostRecent.date.split('-').map(Number);
+  const weekStart = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+  const weekEnd = new Date(weekStart);
+  weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
+  const wn = isoWeekNumber(weekStart);
+  const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+  const toISO = (x: Date) => `${x.getUTCFullYear()}-${pad(x.getUTCMonth() + 1)}-${pad(x.getUTCDate())}`;
+  const metrics: Record<string, number> = {};
+  for (const k of Object.keys(mostRecent.metrics)) {
+    const v = mostRecent.metrics[k];
+    metrics[k] = typeof v === 'number' && isFinite(v) ? v : 0;
+  }
+  return {
+    id: toISO(weekStart),
+    label: `W${wn}`,
+    longLabel: `Week ${wn} · ${MONTH_SHORT[weekStart.getUTCMonth()]} ${weekStart.getUTCDate()}–${weekEnd.getUTCDate()}`,
+    start: toISO(weekStart),
+    end: toISO(weekEnd),
+    count: 1,
+    metrics,
+  };
+}
+
 // Never cache this route — period parameter drives fresh Notion reads every request
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -79,8 +120,7 @@ export async function GET(request: NextRequest) {
   const token = process.env.NOTION_TOKEN;
   if (!token) {
     const raw = mockSnapshots(now);
-    const { buckets, totals, granularity } = aggregate(raw, period, AGG_RULES, now);
-    return mkResponse(buckets, totals, granularity, true);
+    return buildFromRaw(raw, period, now, true);
   }
 
   try {
@@ -109,14 +149,38 @@ export async function GET(request: NextRequest) {
       })
       .filter((r): r is RawSnapshot => r !== null);
 
-    const { buckets, totals, granularity } = aggregate(raw, period, AGG_RULES, now);
-    return mkResponse(buckets, totals, granularity, false);
+    return buildFromRaw(raw, period, now, false);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     const raw = mockSnapshots(now);
-    const { buckets, totals, granularity } = aggregate(raw, period, AGG_RULES, now);
-    return mkResponse(buckets, totals, granularity, true, message);
+    return buildFromRaw(raw, period, now, true, message);
   }
+}
+
+/**
+ * Given raw weekly snapshots, build the response. For the weekly period we
+ * show the most recent weekly row as a single week bucket (because N8N data
+ * is weekly-granular; sub-bucketing into 7 daily buckets would leave 6 empty).
+ * For monthly/quarterly/annually, we use the standard aggregate() pipeline.
+ */
+function buildFromRaw(raw: RawSnapshot[], period: DashboardPeriod, now: Date, mock: boolean, error?: string) {
+  if (period === 'weekly') {
+    const b = singleWeekBucket(raw);
+    if (b) {
+      const totals = {
+        totalTriggers: b.metrics.totalTriggers ?? 0,
+        failedTriggers: b.metrics.failedTriggers ?? 0,
+        activeWorkflows: b.metrics.activeWorkflows ?? 0,
+        newWorkflows: b.metrics.newWorkflows ?? 0,
+        hoursSaved: b.metrics.hoursSaved ?? 0,
+        revenueImpact: b.metrics.revenueImpact ?? 0,
+      };
+      return mkResponse([b], totals, 'week', mock, error);
+    }
+    // no data — fall through to empty aggregate
+  }
+  const { buckets, totals, granularity } = aggregate(raw, period, AGG_RULES, now);
+  return mkResponse(buckets, totals, granularity, mock, error);
 }
 
 function mkResponse(

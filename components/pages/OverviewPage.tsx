@@ -119,12 +119,31 @@ export function OverviewPage() {
 
   const totalHours   = (n8nTotals?.hoursSaved ?? 0) + (finTotals?.hoursSaved ?? 0) + (elTotals?.hoursSaved ?? 0);
   const totalRevenue = (n8nTotals?.revenueImpact ?? 0) + (finTotals?.revenueImpact ?? 0) + (elTotals?.revenueImpact ?? 0);
-  const activeWorkflows = n8nTotals?.activeWorkflows ?? 0;
-  const failingCount    = n8nTotals?.failedTriggers ?? 0;
 
-  const successRate = n8nTotals && n8nTotals.totalTriggers > 0
-    ? Math.round(((n8nTotals.totalTriggers - n8nTotals.failedTriggers) / n8nTotals.totalTriggers) * 100)
-    : 100;
+  // Active automations across all three tools
+  const n8nActive = n8nTotals?.activeWorkflows ?? 0;
+  const finActive = finTotals?.activeFinProcedures ?? 0;
+  const elActive  = elTotals?.agents ?? 0;
+  const totalActive = n8nActive + finActive + elActive;
+  const failingCount = n8nTotals?.failedTriggers ?? 0;
+
+  // Combined success rate: weighted by event volume across all three tools.
+  //   N8N success = triggers - failedTriggers
+  //   FIN success = finResolved (autonomously resolved)
+  //   EL  success = calls - calls*transferRate/100 (deflected, not transferred)
+  const n8nEvents = n8nTotals?.totalTriggers ?? 0;
+  const n8nGood   = Math.max(0, n8nEvents - (n8nTotals?.failedTriggers ?? 0));
+  const finEvents = finTotals?.finInvolvement ?? 0;
+  const finGood   = finTotals?.finResolved ?? 0;
+  const elEvents  = elTotals?.calls ?? 0;
+  const elGood    = elEvents > 0 && elTotals
+    ? Math.max(0, Math.round(elEvents * (1 - (elTotals.transferRate / 100))))
+    : 0;
+  const combinedEvents = n8nEvents + finEvents + elEvents;
+  const combinedGood   = n8nGood + finGood + elGood;
+  const successRate = combinedEvents > 0
+    ? Math.round((combinedGood / combinedEvents) * 100)
+    : null;
 
   const norm = (s: string) => s.toLowerCase().trim();
   const backlogProjects    = projects.filter((p) => norm(p.status) === 'to do');
@@ -177,9 +196,22 @@ export function OverviewPage() {
 
         <SectionHeader eyebrow="1. OVERALL PERFORMANCE" title="Performance Overview" />
 
-        {/* Progress */}
+        {/* Progress — combined success rate across N8N, FIN, and ElevenLabs */}
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 16 }}>
-          <ProgressMetric label="OVERALL AUTOMATION SUCCESS RATE" value={loading ? 94 : successRate} />
+          <ProgressMetric
+            label={`OVERALL AUTOMATION SUCCESS RATE · ${periodLabelFor(period).toUpperCase()}`}
+            value={loading || successRate == null ? 0 : successRate}
+          />
+          {!loading && combinedEvents > 0 && (
+            <p style={{ fontSize: '0.7rem', color: '#6a8870', marginTop: 8, letterSpacing: '0.02em' }}>
+              {combinedGood.toLocaleString()} successful / {combinedEvents.toLocaleString()} total · N8N {n8nGood}/{n8nEvents}, FIN {finGood}/{finEvents}, 11L {elGood}/{elEvents}
+            </p>
+          )}
+          {!loading && combinedEvents === 0 && (
+            <p style={{ fontSize: '0.7rem', color: '#6a8870', marginTop: 8 }}>
+              No activity recorded in the selected period.
+            </p>
+          )}
         </div>
 
         {/* KPI cards — combined across all tools */}
@@ -202,12 +234,21 @@ export function OverviewPage() {
           />
           <BenchKPICard
             label="Automation Active"
-            value={loading ? '—' : activeWorkflows}
+            value={loading ? '—' : totalActive}
             showInfo
             subBadge={
-              <span style={{ fontSize: '0.65rem', color: '#6a8870', display: 'flex', alignItems: 'center', gap: 4 }}>
-                <StatusDot color="#3dba62" />{activeWorkflows - failingCount} Working
-                <StatusDot color="#e05858" />{failingCount} Failing
+              <span style={{ fontSize: '0.65rem', color: '#6a8870', display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                <span>{n8nActive} N8N</span>
+                <span style={{ opacity: 0.5 }}>·</span>
+                <span>{finActive} FIN</span>
+                <span style={{ opacity: 0.5 }}>·</span>
+                <span>{elActive} 11L</span>
+                {failingCount > 0 && (
+                  <>
+                    <span style={{ opacity: 0.5 }}>·</span>
+                    <StatusDot color="#e05858" /><span style={{ color: '#e05858' }}>{failingCount} Failing</span>
+                  </>
+                )}
               </span>
             }
           />

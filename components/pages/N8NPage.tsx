@@ -310,9 +310,12 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
   useEffect(() => { fetchLive(false); }, [fetchLive]);
 
   const workflows = sidebarWorkflows ?? liveWorkflows;
+  // Period success rate: reflect the selected timeline. If no triggers recorded
+  // in the window, we show 0 (and a "no activity" note) instead of 100 — a
+  // vacuous 100% would mislead when failures are present elsewhere.
   const successRate = totals && totals.totalTriggers > 0
     ? Math.round(((totals.totalTriggers - totals.failedTriggers) / totals.totalTriggers) * 100)
-    : 100;
+    : null;
 
   const chartData: ChartPoint[] = buildSuccessFromBuckets(
     buckets.map((b) => ({ label: b.label ?? b.weekLabel, metrics: { totalTriggers: b.totalTriggers, failedTriggers: b.failedTriggers } })),
@@ -358,7 +361,20 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
               <SectionHeader eyebrow="1. OVERALL PERFORMANCE" title="N8N Performance Overview" />
 
               <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 16 }}>
-                <ProgressMetric label="OVERALL AUTOMATION SUCCESS RATE" value={loading ? 94 : successRate} />
+                <ProgressMetric
+                  label={`AUTOMATION SUCCESS RATE · ${period.toUpperCase()}`}
+                  value={loading || successRate == null ? 0 : successRate}
+                />
+                {!loading && totals && totals.totalTriggers > 0 && (
+                  <p style={{ fontSize: '0.7rem', color: '#6a8870', marginTop: 8 }}>
+                    {(totals.totalTriggers - totals.failedTriggers).toLocaleString()} successful / {totals.totalTriggers.toLocaleString()} total triggers · {totals.failedTriggers} failed
+                  </p>
+                )}
+                {!loading && (!totals || totals.totalTriggers === 0) && (
+                  <p style={{ fontSize: '0.7rem', color: '#6a8870', marginTop: 8 }}>
+                    No triggers recorded in the selected {period} window.
+                  </p>
+                )}
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
