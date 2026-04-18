@@ -6,8 +6,8 @@ import { PeriodTabs } from '@/components/PeriodTabs';
 import { ProgressMetric } from '@/components/ProgressMetric';
 import { BenchKPICard } from '@/components/BenchKPICard';
 import { RefreshCw } from 'lucide-react';
-import type { DashboardPeriod, N8NSnapshot, ClickUpTask, ChartPoint, N8NTotals, FINTotals, ElevenLabsTotals } from '@/lib/types';
-import { buildSuccessFromBuckets, formatCurrency, formatHours } from '@/lib/chartUtils';
+import type { DashboardPeriod, N8NSnapshot, FINSnapshot, ElevenLabsSnapshot, ClickUpTask, ChartPoint, N8NTotals, FINTotals, ElevenLabsTotals, WorkflowHealthData } from '@/lib/types';
+import { formatCurrency, formatHours } from '@/lib/chartUtils';
 
 const SuccessChart = dynamic(
   () => import('@/components/charts/SuccessChart').then((m) => m.SuccessChart),
@@ -69,9 +69,12 @@ function periodLabelFor(p: DashboardPeriod): string {
 export function OverviewPage() {
   const [period, setPeriod] = useState<DashboardPeriod>('weekly');
   const [n8nBuckets, setN8nBuckets] = useState<N8NSnapshot[]>([]);
+  const [finBuckets, setFinBuckets] = useState<FINSnapshot[]>([]);
+  const [elBuckets,  setElBuckets]  = useState<ElevenLabsSnapshot[]>([]);
   const [n8nTotals, setN8nTotals] = useState<N8NTotals | null>(null);
   const [finTotals, setFinTotals] = useState<FINTotals | null>(null);
   const [elTotals,  setElTotals]  = useState<ElevenLabsTotals | null>(null);
+  const [liveWorkflows, setLiveWorkflows] = useState<WorkflowHealthData[]>([]);
   const [projects, setProjects]         = useState<ClickUpTask[]>([]);
   const [loading, setLoading]           = useState(true);
   const [refreshing, setRefreshing]     = useState(false);
@@ -85,13 +88,23 @@ export function OverviewPage() {
       fetch(`/api/notion/fin?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
       fetch(`/api/notion/elevenlabs?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
       fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
-    ]).then(([n8nResult, finResult, elResult, cuResult]) => {
+      fetch(`/api/dashboard?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+    ]).then(([n8nResult, finResult, elResult, cuResult, dashResult]) => {
       if (n8nResult.status === 'fulfilled') {
         setN8nBuckets(n8nResult.value.buckets ?? []);
         setN8nTotals(n8nResult.value.totals ?? null);
       }
-      if (finResult.status === 'fulfilled') setFinTotals(finResult.value.totals ?? null);
-      if (elResult.status === 'fulfilled') setElTotals(elResult.value.totals ?? null);
+      if (finResult.status === 'fulfilled') {
+        setFinBuckets(finResult.value.buckets ?? []);
+        setFinTotals(finResult.value.totals ?? null);
+      }
+      if (elResult.status === 'fulfilled') {
+        setElBuckets(elResult.value.buckets ?? []);
+        setElTotals(elResult.value.totals ?? null);
+      }
+      if (dashResult.status === 'fulfilled') {
+        setLiveWorkflows(dashResult.value.workflows ?? []);
+      }
       if (cuResult.status === 'fulfilled') {
         const tasks = cuResult.value.tasks ?? [];
         setProjects(tasks);
@@ -120,12 +133,20 @@ export function OverviewPage() {
   const totalHours   = (n8nTotals?.hoursSaved ?? 0) + (finTotals?.hoursSaved ?? 0) + (elTotals?.hoursSaved ?? 0);
   const totalRevenue = (n8nTotals?.revenueImpact ?? 0) + (finTotals?.revenueImpact ?? 0) + (elTotals?.revenueImpact ?? 0);
 
-  // Active automations across all three tools
-  const n8nActive = n8nTotals?.activeWorkflows ?? 0;
+  // Active automations — use LIVE n8n workflow count when available so the
+  // number reflects actual reality (14 healthy + 2 degraded + 2 failing, etc)
+  // rather than a Notion snapshot that can lag. Fall back to Notion totals
+  // only if the live API is down.
+  const liveN8nActive = liveWorkflows.length;
+  const n8nActive = liveN8nActive > 0 ? liveN8nActive : (n8nTotals?.activeWorkflows ?? 0);
   const finActive = finTotals?.activeFinProcedures ?? 0;
   const elActive  = elTotals?.agents ?? 0;
   const totalActive = n8nActive + finActive + elActive;
-  const failingCount = n8nTotals?.failedTriggers ?? 0;
+  // Live failing count wins over Notion's weekly aggregate (current state > snapshot)
+  const liveFailing = liveWorkflows.filter((w) => w.health === 'failing').length;
+  const liveDegraded = liveWorkflows.filter((w) => w.health === 'degraded').length;
+  const liveHealthy = liveWorkflows.filter((w) => w.health === 'healthy').length;
+  const failingCount = liveWorkflows.length > 0 ? liveFailing : (n8nTotals?.failedTriggers ?? 0);
 
   // Combined success rate: weighted by event volume across all three tools.
   //   N8N success = triggers - failedTriggers
@@ -152,11 +173,41 @@ export function OverviewPage() {
   const completedProjects  = projects.filter((p) => norm(p.status) === 'complete');
   const highUrgentInProg   = inProgressProjects.filter((p) => p.priority === 'high' || p.priority === 'urgent');
 
-  const chartData: ChartPoint[] = buildSuccessFromBuckets(
-    n8nBuckets.map((b) => ({ label: b.label ?? b.weekLabel, metrics: { totalTriggers: b.totalTriggers, failedTriggers: b.failedTriggers } })),
-    'totalTriggers',
-    'failedTriggers',
-  );
+  // ── Combined chart: merge N8N + FIN + ElevenLabs buckets by label ──────────
+  // All three sources produce the same period-aligned labels (day/week/month),
+  // so we align them by label index. Each platform contributes:
+  //   success = events it handled correctly
+  //   error   = events that failed / escalated
+  //     N8N : totalTriggers / failedTriggers
+  //     FIN : finResolved as success, (finInvolvement - finResolved) as error
+  //     11L : deflected calls as success, transferred calls as error
+  const chartLabels = (n8nBuckets.length > 0 ? n8nBuckets : finBuckets.length > 0 ? finBuckets : elBuckets)
+    .map((b) => b.label ?? b.weekLabel);
+
+  const chartData: ChartPoint[] = chartLabels.map((label, i) => {
+    const n = n8nBuckets[i];
+    const f = finBuckets[i];
+    const e = elBuckets[i];
+
+    const n8nSuccess = n ? Math.max(0, (n.totalTriggers ?? 0) - (n.failedTriggers ?? 0)) : 0;
+    const n8nErr     = n?.failedTriggers ?? 0;
+
+    const finInv  = f?.finInvolvement ?? 0;
+    const finRes  = f?.finResolved ?? 0;
+    const finSuccess = Math.max(0, finRes);
+    const finErr     = Math.max(0, finInv - finRes);
+
+    const elCalls    = e?.calls ?? 0;
+    const elXferRate = (e?.transferRate ?? 0) / 100;
+    const elErr     = Math.round(elCalls * elXferRate);
+    const elSuccess = Math.max(0, elCalls - elErr);
+
+    return {
+      label,
+      success: n8nSuccess + finSuccess + elSuccess,
+      error: n8nErr + finErr + elErr,
+    };
+  });
 
   const recs = buildRecs(n8nTotals, finTotals, elTotals, projects, periodLabelFor(period));
 
@@ -243,7 +294,15 @@ export function OverviewPage() {
                 <span>{finActive} FIN</span>
                 <span style={{ opacity: 0.5 }}>·</span>
                 <span>{elActive} 11L</span>
-                {failingCount > 0 && (
+                {liveWorkflows.length > 0 && (
+                  <>
+                    <span style={{ opacity: 0.5, marginLeft: 2 }}>·</span>
+                    <StatusDot color="#3dba62" /><span>{liveHealthy}</span>
+                    <StatusDot color="#d4912a" /><span>{liveDegraded}</span>
+                    <StatusDot color="#e05858" /><span style={{ color: liveFailing > 0 ? '#e05858' : undefined }}>{liveFailing}</span>
+                  </>
+                )}
+                {liveWorkflows.length === 0 && failingCount > 0 && (
                   <>
                     <span style={{ opacity: 0.5 }}>·</span>
                     <StatusDot color="#e05858" /><span style={{ color: '#e05858' }}>{failingCount} Failing</span>
@@ -254,10 +313,10 @@ export function OverviewPage() {
           />
         </div>
 
-        {/* Chart */}
+        {/* Combined chart — N8N + FIN + ElevenLabs success vs errors */}
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 28 }}>
           <p style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#6a8870', marginBottom: 12 }}>
-            N8N Automation — Success vs Errors
+            All Platforms — Success vs Errors · N8N + FIN + ElevenLabs
           </p>
           <SuccessChart data={chartData} />
         </div>

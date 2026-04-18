@@ -395,7 +395,8 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
                 />
                 <BenchKPICard
                   label="Workflows Active"
-                  value={liveLoading ? '—' : (totals?.activeWorkflows ?? workflows.length)}
+                  // Prefer live workflow count (reflects actual reality) over Notion snapshot
+                  value={liveLoading ? '—' : (workflows.length || totals?.activeWorkflows || 0)}
                   showInfo
                   subBadge={
                     <span style={{ fontSize: '0.65rem', color: '#6a8870', display: 'flex', alignItems: 'center', gap: 4 }}>
