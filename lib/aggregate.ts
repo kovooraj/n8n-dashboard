@@ -7,10 +7,50 @@
  * Bucket granularity per period:
  *   weekly     → day   (last 7 days)
  *   monthly    → week  (last ~4 weeks)
- *   quarterly  → month (last 3 months)
- *   annually   → month (last 12 months)
+ *   quarterly  → month (current fiscal quarter — 3 months)
+ *   annually   → month (current fiscal year — up to 12 months starting August)
+ *
+ * Fiscal year starts in August. Fiscal quarters:
+ *   Q1 FY: Aug–Oct
+ *   Q2 FY: Nov–Jan
+ *   Q3 FY: Feb–Apr
+ *   Q4 FY: May–Jul
  */
 import type { DashboardPeriod } from './types';
+
+/** Month when the fiscal year starts (0-indexed). August = 7. */
+export const FISCAL_YEAR_START_MONTH = 7;
+
+/**
+ * Return the start Date (UTC) of the current fiscal year for the given
+ * reference date. If the reference month >= August, FY starts this year's Aug;
+ * else it started last year's Aug.
+ */
+export function fiscalYearStart(ref: Date): Date {
+  const y = ref.getUTCFullYear();
+  const m = ref.getUTCMonth();
+  const startYear = m >= FISCAL_YEAR_START_MONTH ? y : y - 1;
+  return new Date(Date.UTC(startYear, FISCAL_YEAR_START_MONTH, 1));
+}
+
+/**
+ * Return the start Date (UTC) of the current fiscal quarter for ref.
+ * Fiscal quarters are Aug–Oct, Nov–Jan, Feb–Apr, May–Jul.
+ */
+export function fiscalQuarterStart(ref: Date): Date {
+  const fyStart = fiscalYearStart(ref);
+  // How many months into the fiscal year is `ref`?
+  let monthsIntoFY = (ref.getUTCFullYear() - fyStart.getUTCFullYear()) * 12
+    + (ref.getUTCMonth() - fyStart.getUTCMonth());
+  if (monthsIntoFY < 0) monthsIntoFY = 0;
+  const quarterIndex = Math.floor(monthsIntoFY / 3); // 0..3
+  const startMonthOffset = quarterIndex * 3;
+  return new Date(Date.UTC(
+    fyStart.getUTCFullYear(),
+    fyStart.getUTCMonth() + startMonthOffset,
+    1,
+  ));
+}
 
 export type Granularity = 'day' | 'week' | 'month';
 export type SourceGranularity = 'daily' | 'weekly';
@@ -143,13 +183,26 @@ export function buildBucketRange(period: DashboardPeriod, now: Date = new Date()
         longLabel: `Week ${wn} · ${MONTH_SHORT[ws.getUTCMonth()]} ${ws.getUTCDate()}–${we.getUTCDate()}`,
       });
     }
+  } else if (period === 'quarterly') {
+    // Current fiscal quarter (3 months starting from fiscal Q start)
+    const qStart = fiscalQuarterStart(today);
+    for (let i = 0; i < 3; i++) {
+      const ms = new Date(Date.UTC(qStart.getUTCFullYear(), qStart.getUTCMonth() + i, 1));
+      const me = new Date(Date.UTC(ms.getUTCFullYear(), ms.getUTCMonth() + 1, 0));
+      buckets.push({
+        id: `${ms.getUTCFullYear()}-${pad(ms.getUTCMonth() + 1)}`,
+        start: ms,
+        end: me,
+        label: MONTH_SHORT[ms.getUTCMonth()],
+        longLabel: `${MONTH_SHORT[ms.getUTCMonth()]} ${ms.getUTCFullYear()}`,
+      });
+    }
   } else {
-    // month — last `count` calendar months ending in the month containing today
-    const thisMonthStart = startOfMonth(today);
-    for (let i = count - 1; i >= 0; i--) {
-      const ms = new Date(thisMonthStart);
-      ms.setUTCMonth(ms.getUTCMonth() - i);
-      const me = new Date(Date.UTC(ms.getUTCFullYear(), ms.getUTCMonth() + 1, 0)); // last day of month
+    // annually — 12 months of the current fiscal year (Aug → Jul)
+    const fyStart = fiscalYearStart(today);
+    for (let i = 0; i < 12; i++) {
+      const ms = new Date(Date.UTC(fyStart.getUTCFullYear(), fyStart.getUTCMonth() + i, 1));
+      const me = new Date(Date.UTC(ms.getUTCFullYear(), ms.getUTCMonth() + 1, 0));
       buckets.push({
         id: `${ms.getUTCFullYear()}-${pad(ms.getUTCMonth() + 1)}`,
         start: ms,

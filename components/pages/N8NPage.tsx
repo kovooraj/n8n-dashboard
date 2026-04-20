@@ -7,6 +7,7 @@ import { PeriodTabs } from '@/components/PeriodTabs';
 import { ProgressMetric } from '@/components/ProgressMetric';
 import { BenchKPICard } from '@/components/BenchKPICard';
 import { AutomationWorkflowSidebar } from '@/components/AutomationWorkflowSidebar';
+import { HideCompletedToggle } from '@/components/HideCompletedToggle';
 import type { DashboardPeriod, N8NSnapshot, N8NTotals, SidebarWorkflow, ChartPoint, ClickUpTask, WorkflowHealthData, N8nExecution } from '@/lib/types';
 import { buildSuccessFromBuckets, formatCurrency, formatHours } from '@/lib/chartUtils';
 
@@ -253,6 +254,7 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
   const [liveLoading, setLiveLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null); // null = overview
+  const [hideCompleted, setHideCompleted] = useState(true); // default: hide completed tasks
 
   // Fetch Notion period buckets + totals for the chart/KPIs
   useEffect(() => {
@@ -326,7 +328,11 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
   const selectedWorkflow = selectedId ? workflows.find((w) => w.id === selectedId) ?? null : null;
   const failingWorkflows = workflows.filter((w) => w.health === 'failing');
 
-  const n8nProjects = projects.filter((p) => p.platform === 'n8n');
+  const allN8nProjects = projects.filter((p) => p.platform === 'n8n');
+  const completedN8nCount = allN8nProjects.filter((p) => p.status === 'complete').length;
+  const n8nProjects = hideCompleted
+    ? allN8nProjects.filter((p) => p.status !== 'complete')
+    : allN8nProjects;
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
@@ -382,22 +388,28 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
                   label="Total Automation Triggers"
                   value={loading ? '—' : (totals?.totalTriggers ?? 0).toLocaleString()}
                   showInfo
+                  tooltip={period === 'weekly'
+                    ? `Live count: every n8n execution started in the last 7 days across every active workflow. Pulled from the n8n Executions API and bucketed per day.`
+                    : `Sum of "Total Triggers" from weekly Notion rollup rows that fall inside the selected ${period} window.`}
                 />
                 <BenchKPICard
                   label="Estimated Hours Saved"
                   value={loading ? '—' : formatHours(totals?.hoursSaved ?? 0)}
                   showInfo
+                  tooltip={`Derived from Notion's "Total Hours Saved" formula (manual-equivalent effort × triggers). ${period === 'weekly' ? 'For weekly, uses the latest Notion weekly row (live executions don\u2019t carry business-impact estimates).' : `Summed across Notion rows in the ${period} window.`}`}
                 />
                 <BenchKPICard
                   label="Estimated Revenue Impact"
                   value={loading ? '—' : formatCurrency(totals?.revenueImpact ?? 0)}
                   showInfo
+                  tooltip={`Derived from Notion's "Total Revenue Impact" formula. Accounts for labour cost avoidance + revenue protected/unlocked per workflow. ${period === 'weekly' ? 'For weekly, uses the latest Notion weekly row.' : `Summed across Notion rows in the ${period} window.`}`}
                 />
                 <BenchKPICard
                   label="Workflows Active"
                   // Prefer live workflow count (reflects actual reality) over Notion snapshot
                   value={liveLoading ? '—' : (workflows.length || totals?.activeWorkflows || 0)}
                   showInfo
+                  tooltip={`Live count from the n8n API — every workflow with active=true right now. Sub-badge shows recent-execution health: Healthy = 0% failure across last ~10 runs; Degraded = ≤40% failure; Failing = >40% failure or most recent run errored.`}
                   subBadge={
                     <span style={{ fontSize: '0.65rem', color: '#6a8870', display: 'flex', alignItems: 'center', gap: 4 }}>
                       <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3dba62', display: 'inline-block' }} />
@@ -448,7 +460,14 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
               {/* N8N ClickUp Projects */}
               {!liveLoading && (
                 <div style={{ marginTop: 28 }}>
-                  <SectionHeader eyebrow="3. AI PROJECTS" title="N8N Workflow Projects" />
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                    <SectionHeader eyebrow="3. AI PROJECTS" title="N8N Workflow Projects" />
+                    <HideCompletedToggle
+                      checked={hideCompleted}
+                      onChange={setHideCompleted}
+                      count={completedN8nCount}
+                    />
+                  </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {n8nProjects.map((project) => {
                       const statusColor = STATUS_COLORS[project.status] ?? '#6a8870';

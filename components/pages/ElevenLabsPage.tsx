@@ -6,6 +6,7 @@ import { RefreshCw } from 'lucide-react';
 import { PeriodTabs } from '@/components/PeriodTabs';
 import { ProgressMetric } from '@/components/ProgressMetric';
 import { BenchKPICard } from '@/components/BenchKPICard';
+import { HideCompletedToggle } from '@/components/HideCompletedToggle';
 import type { DashboardPeriod, ElevenLabsSnapshot, ElevenLabsTotals, ClickUpTask } from '@/lib/types';
 import { buildVolumeFromBuckets, formatCurrency, formatHours } from '@/lib/chartUtils';
 import type { VolumePoint } from '@/lib/types';
@@ -40,6 +41,7 @@ export function ElevenLabsPage() {
   const [projects, setProjects] = useState<ClickUpTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [hideCompleted, setHideCompleted] = useState(true);
 
   const fetchData = useCallback((isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -75,7 +77,11 @@ export function ElevenLabsPage() {
     'resolved',
   );
 
-  const callProjects = projects.filter((p) => p.platform === 'elevenlabs');
+  const allCallProjects = projects.filter((p) => p.platform === 'elevenlabs');
+  const completedCallCount = allCallProjects.filter((p) => p.status === 'complete').length;
+  const callProjects = hideCompleted
+    ? allCallProjects.filter((p) => p.status !== 'complete')
+    : allCallProjects;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -117,26 +123,31 @@ export function ElevenLabsPage() {
             label="Total # of Calls"
             value={loading ? '—' : (totals?.calls ?? 0).toLocaleString()}
             showInfo
+            tooltip={`"ElevenLabs Calls" from the Notion database — count of inbound calls handled by the voice agent. Summed across daily rows in the selected ${period} window.`}
           />
           <BenchKPICard
             label="Transferred to Live Agent"
             value={loading ? '—' : `${totals?.transferRate ?? 0}%`}
             showInfo
+            tooltip={`Average of daily "Transfer to live agent %" values over the ${period} window. The inverse (100 − this) is the deflection rate — calls the AI agent handled end-to-end without handing off.`}
           />
           <BenchKPICard
             label="Estimated Hours Saved"
             value={loading ? '—' : formatHours(totals?.hoursSaved ?? 0)}
             showInfo
+            tooltip={`Notion formula "Total Hours Saved" for ElevenLabs: deflected calls × average human handle time per call. Summed over the ${period} window.`}
           />
           <BenchKPICard
             label="Estimated Revenue Impact"
             value={loading ? '—' : formatCurrency(totals?.revenueImpact ?? 0)}
             showInfo
+            tooltip={`Notion formula "Total Revenue Impact" for ElevenLabs: labour cost avoided on deflected calls + orders/bookings unlocked by 24/7 coverage. Summed over the ${period} window.`}
           />
           <BenchKPICard
             label="CSAT Score"
             value={loading ? '—' : (totals && totals.csat > 0 ? `${totals.csat}%` : 'N/A')}
             showInfo
+            tooltip={`Caller satisfaction rating averaged across daily Notion rows. Shows N/A when no CSAT data has been recorded for the ${period} window.`}
           />
         </div>
 
@@ -183,7 +194,14 @@ export function ElevenLabsPage() {
         </div>
 
         {/* Section 3 */}
-        <SectionHeader eyebrow="3. AUTOMATIONS" title="Call Related Projects" />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <SectionHeader eyebrow="3. AUTOMATIONS" title="Call Related Projects" />
+          <HideCompletedToggle
+            checked={hideCompleted}
+            onChange={setHideCompleted}
+            count={completedCallCount}
+          />
+        </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {(loading ? [] : callProjects).map((project) => {
             const statusColor = STATUS_COLORS[project.status] ?? '#6a8870';

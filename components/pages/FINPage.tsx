@@ -6,6 +6,7 @@ import { RefreshCw } from 'lucide-react';
 import { PeriodTabs } from '@/components/PeriodTabs';
 import { ProgressMetric } from '@/components/ProgressMetric';
 import { BenchKPICard } from '@/components/BenchKPICard';
+import { HideCompletedToggle } from '@/components/HideCompletedToggle';
 import type { DashboardPeriod, FINSnapshot, FINTotals, ClickUpTask } from '@/lib/types';
 import { buildVolumeFromBuckets, formatCurrency, formatHours } from '@/lib/chartUtils';
 import type { VolumePoint } from '@/lib/types';
@@ -40,6 +41,7 @@ export function FINPage() {
   const [projects, setProjects] = useState<ClickUpTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [hideCompleted, setHideCompleted] = useState(true);
 
   const fetchData = useCallback((isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -68,7 +70,11 @@ export function FINPage() {
   const resolutionRate = totals?.finAutomationRate ?? 0;
   const escalatedCount = totals ? Math.max(0, totals.finInvolvement - totals.finResolved) : 0;
 
-  const finProjects = projects.filter((p) => p.platform === 'fin');
+  const allFinProjects = projects.filter((p) => p.platform === 'fin');
+  const completedFinCount = allFinProjects.filter((p) => p.status === 'complete').length;
+  const finProjects = hideCompleted
+    ? allFinProjects.filter((p) => p.status !== 'complete')
+    : allFinProjects;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -110,21 +116,25 @@ export function FINPage() {
             label="Conversations"
             value={loading ? '—' : (totals?.finInvolvement ?? 0).toLocaleString()}
             showInfo
+            tooltip={`"Fin Involvement" from the Intercom FIN Notion database — count of customer conversations where Fin engaged. Summed across daily rows in the selected ${period} window.`}
           />
           <BenchKPICard
             label="Estimated Hours Saved"
             value={loading ? '—' : formatHours(totals?.hoursSaved ?? 0)}
             showInfo
+            tooltip={`Notion formula "Total Hours Saved" for FIN: resolved conversations × average human handle time saved. Summed over the ${period} window.`}
           />
           <BenchKPICard
             label="Estimated Revenue Impact"
             value={loading ? '—' : formatCurrency(totals?.revenueImpact ?? 0)}
             showInfo
+            tooltip={`Notion formula "Total Revenue Impact" for FIN: labour cost avoided on autonomously resolved chats + retention value from faster response. Summed over the ${period} window.`}
           />
           <BenchKPICard
             label="CSAT Score"
             value={loading ? '—' : `${totals?.csat ?? 0}%`}
             showInfo
+            tooltip={`Customer satisfaction rating averaged across daily Notion rows in the ${period} window. Source: Intercom's post-conversation CSAT pulled into the Notion FIN database.`}
           />
         </div>
 
@@ -171,7 +181,14 @@ export function FINPage() {
         </div>
 
         {/* Section 3 */}
-        <SectionHeader eyebrow="3. AUTOMATIONS" title="Fin Related Projects" />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <SectionHeader eyebrow="3. AUTOMATIONS" title="Fin Related Projects" />
+          <HideCompletedToggle
+            checked={hideCompleted}
+            onChange={setHideCompleted}
+            count={completedFinCount}
+          />
+        </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {(loading ? [] : finProjects).map((project) => {
             const statusColor = STATUS_COLORS[project.status] ?? '#6a8870';

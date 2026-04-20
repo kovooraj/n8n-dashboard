@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { PeriodTabs } from '@/components/PeriodTabs';
 import { ProgressMetric } from '@/components/ProgressMetric';
 import { BenchKPICard } from '@/components/BenchKPICard';
+import { HideCompletedToggle } from '@/components/HideCompletedToggle';
 import { RefreshCw } from 'lucide-react';
 import type { DashboardPeriod, N8NSnapshot, FINSnapshot, ElevenLabsSnapshot, ClickUpTask, ChartPoint, N8NTotals, FINTotals, ElevenLabsTotals, WorkflowHealthData } from '@/lib/types';
 import { formatCurrency, formatHours } from '@/lib/chartUtils';
@@ -27,39 +28,14 @@ function StatusDot({ color }: { color: string }) {
   return <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, display: 'inline-block', marginRight: 6 }} />;
 }
 
-function currentQuarter(): number {
-  return Math.ceil((new Date().getMonth() + 1) / 3);
-}
-
-function buildRecs(
-  n8n: N8NTotals | null,
-  fin: FINTotals | null,
-  el: ElevenLabsTotals | null,
-  projects: ClickUpTask[],
-  periodLabel: string,
-) {
-  const inProgress = projects.filter((p) => p.status === 'in progress').length;
-  const done = projects.filter((p) => p.status === 'complete').length;
-  const scoping = projects.filter((p) => p.status === 'planning / scoping').length;
-  const failingCount = n8n?.failedTriggers ?? 0;
-  const finRate = fin?.finAutomationRate ?? 0;
-  const transferRate = el?.transferRate ?? 50;
-  const deflection = Math.round(100 - transferRate);
-  const totalTriggers = (n8n?.totalTriggers ?? 0) + (fin?.finInvolvement ?? 0) + (el?.calls ?? 0);
-
-  const tracking = inProgress > 0
-    ? `${inProgress} task${inProgress > 1 ? 's' : ''} in progress, ${scoping} in scoping, ${done} complete. Focus on unblocking high-priority items to hit Q${currentQuarter()} OKR targets this sprint.`
-    : `${done} tasks complete, ${scoping} in scoping. Pipeline looks clear — pull new initiatives from the backlog to maintain momentum.`;
-
-  const roi = failingCount > 0
-    ? `${failingCount} workflow${failingCount > 1 ? 's are' : ' is'} failing and costing automation hours. Fix these immediately. FIN is resolving ${finRate}% autonomously — target 40%+ by expanding its knowledge base. ElevenLabs is deflecting ${deflection}% of calls — a further 10% improvement would save ~${Math.round(((el?.calls ?? 100) * 0.1 * 39) / 3600)} additional hours over this ${periodLabel}.`
-    : `All workflows healthy. FIN resolving ${finRate}% of conversations autonomously — increase to 40%+ target by improving FIN knowledge base coverage. ElevenLabs deflecting ${deflection}% of inbound calls. Next ROI lever: raise FIN automation rate to recover ~${Math.round((40 - finRate) * 15)} agent-hours/${periodLabel}.`;
-
-  const adoption = totalTriggers > 1000
-    ? `${totalTriggers.toLocaleString()} combined triggers this ${periodLabel} across N8N, FIN, and ElevenLabs — strong adoption signal. Identify the ${inProgress > 0 ? inProgress + ' in-progress' : 'remaining'} tools with the lowest trigger volume and run targeted enablement sessions to close the gap.`
-    : `${totalTriggers.toLocaleString()} combined triggers this ${periodLabel}. Adoption is building — onboard remaining team members and document use cases to accelerate volume toward targets.`;
-
-  return { tracking, roi, adoption };
+/** Shape returned by /api/insights. Populated by Claude or heuristic fallback. */
+interface InsightsResult {
+  executive?: string;
+  tracking: string;
+  roi: string;
+  adoption: string;
+  source?: 'claude' | 'heuristic';
+  reason?: string;
 }
 
 function periodLabelFor(p: DashboardPeriod): string {
@@ -78,6 +54,9 @@ export function OverviewPage() {
   const [projects, setProjects]         = useState<ClickUpTask[]>([]);
   const [loading, setLoading]           = useState(true);
   const [refreshing, setRefreshing]     = useState(false);
+  const [hideCompleted, setHideCompleted] = useState(true);
+  const [insights, setInsights] = useState<InsightsResult | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
 
   const fetchData = useCallback((isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -167,10 +146,13 @@ export function OverviewPage() {
     : null;
 
   const norm = (s: string) => s.toLowerCase().trim();
-  const backlogProjects    = projects.filter((p) => norm(p.status) === 'to do');
-  const scopingProjects    = projects.filter((p) => norm(p.status) === 'planning / scoping');
-  const inProgressProjects = projects.filter((p) => norm(p.status) === 'in progress');
-  const completedProjects  = projects.filter((p) => norm(p.status) === 'complete');
+  const visibleProjects = hideCompleted
+    ? projects.filter((p) => norm(p.status) !== 'complete')
+    : projects;
+  const backlogProjects    = visibleProjects.filter((p) => norm(p.status) === 'to do');
+  const scopingProjects    = visibleProjects.filter((p) => norm(p.status) === 'planning / scoping');
+  const inProgressProjects = visibleProjects.filter((p) => norm(p.status) === 'in progress');
+  const completedProjects  = projects.filter((p) => norm(p.status) === 'complete'); // always shown for count
   const highUrgentInProg   = inProgressProjects.filter((p) => p.priority === 'high' || p.priority === 'urgent');
 
   // ── Combined chart: merge N8N + FIN + ElevenLabs buckets by label ──────────
@@ -209,7 +191,49 @@ export function OverviewPage() {
     };
   });
 
-  const recs = buildRecs(n8nTotals, finTotals, elTotals, projects, periodLabelFor(period));
+  // ── AI insights ────────────────────────────────────────────────────────────
+  // When the dashboard data is loaded (or refreshed), POST a compact summary
+  // to /api/insights and use Claude to generate context-aware recommendations.
+  // Falls back to a heuristic string inside the route if ANTHROPIC_API_KEY is
+  // missing or Claude errors out.
+  useEffect(() => {
+    if (loading) return;
+    if (!n8nTotals && !finTotals && !elTotals) return;
+    const controller = new AbortController();
+    setInsightsLoading(true);
+    const payload = {
+      period,
+      n8n: n8nTotals,
+      fin: finTotals,
+      el: elTotals,
+      liveN8n: {
+        healthy: liveHealthy,
+        degraded: liveDegraded,
+        failing: liveFailing,
+        failingNames: liveWorkflows.filter((w) => w.health === 'failing').map((w) => w.workflow.name),
+      },
+      projects: {
+        backlog: backlogProjects.length,
+        scoping: scopingProjects.length,
+        inProgress: inProgressProjects.length,
+        complete: completedProjects.length,
+        highUrgent: highUrgentInProg.slice(0, 5).map((p) => p.name),
+      },
+    };
+    fetch('/api/insights', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+      cache: 'no-store',
+    })
+      .then((r) => r.json())
+      .then((data: InsightsResult) => { setInsights(data); })
+      .catch(() => { /* keep last insights on error */ })
+      .finally(() => setInsightsLoading(false));
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period, loading, n8nTotals, finTotals, elTotals, liveWorkflows.length]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -271,22 +295,26 @@ export function OverviewPage() {
             label="Total Automation Triggers"
             value={loading ? '—' : totalTriggers.toLocaleString()}
             showInfo
+            tooltip={`Sum of events handled across all three platforms in the selected ${periodLabelFor(period)}. N8N: workflow executions from the live n8n API (weekly) or weekly Notion rollups (monthly+). FIN: Intercom FIN involvements from Notion. ElevenLabs: inbound calls from Notion. Formula: n8nTriggers + finInvolvement + elCalls.`}
             subBadge={<span style={{ fontSize: '0.65rem', color: '#6a8870' }}>N8N · FIN · Calls</span>}
           />
           <BenchKPICard
             label="Estimated Hours Saved"
             value={loading ? '—' : formatHours(totalHours)}
             showInfo
+            tooltip={`Business-impact estimate rolled up from each platform's Notion record. Derived from per-tool formulas (e.g. calls × avg handle time saved, triggers × manual-equivalent time). Summed across N8N + FIN + ElevenLabs for the ${periodLabelFor(period)}.`}
           />
           <BenchKPICard
             label="Estimated Revenue Impact"
             value={loading ? '—' : formatCurrency(totalRevenue)}
             showInfo
+            tooltip={`Business-impact estimate rolled up from each platform's Notion "Total Revenue Impact" formula. Accounts for labour cost avoidance + revenue protected/unlocked. Sum across all three platforms for the ${periodLabelFor(period)}.`}
           />
           <BenchKPICard
             label="Automation Active"
             value={loading ? '—' : totalActive}
             showInfo
+            tooltip={`Live count of active automations right now. N8N: queried from the n8n API (all workflows with active=true). FIN: "Active Fin Procedures" from the latest Notion row. ElevenLabs: "Active ElevenLabs Agents" from the latest Notion row. Health dots show live n8n state: Healthy (all recent runs OK), Degraded (some failures), Failing (recent failure rate >40% or last run failed).`}
             subBadge={
               <span style={{ fontSize: '0.65rem', color: '#6a8870', display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                 <span>{n8nActive} N8N</span>
@@ -322,14 +350,60 @@ export function OverviewPage() {
         </div>
 
         {/* Section 2 */}
-        <SectionHeader eyebrow="2. KEY METRICS" title="Objectives and Key Performance" />
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
+          <SectionHeader eyebrow="2. KEY METRICS" title="Objectives and Key Performance" />
+          <span
+            style={{
+              fontSize: '0.6rem', color: insights?.source === 'claude' ? '#3dba62' : '#6a8870',
+              letterSpacing: '0.1em', textTransform: 'uppercase', padding: '3px 8px',
+              borderRadius: 4, background: insights?.source === 'claude' ? 'rgba(61,186,98,0.1)' : 'rgba(106,136,112,0.08)',
+              border: `1px solid ${insights?.source === 'claude' ? 'rgba(61,186,98,0.3)' : 'rgba(106,136,112,0.25)'}`,
+              marginBottom: 20,
+            }}
+            title={insights?.reason ?? (insights?.source === 'claude' ? 'Analysed by Claude Sonnet 4.5' : 'Heuristic fallback — set ANTHROPIC_API_KEY to enable AI insights')}
+          >
+            {insightsLoading ? 'Analysing…' : insights?.source === 'claude' ? 'AI-analysed · Claude' : 'Heuristic'}
+          </span>
+        </div>
+
+        {/* Executive summary — one-line TL;DR from Claude */}
+        {!loading && insights?.executive && (
+          <div style={{
+            background: 'rgba(61,186,98,0.05)',
+            border: '1px solid rgba(61,186,98,0.25)',
+            borderRadius: 8,
+            padding: '12px 16px',
+            marginBottom: 14,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+          }}>
+            <span style={{
+              fontSize: '0.55rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase',
+              color: '#3dba62', flexShrink: 0, marginTop: 2, padding: '2px 6px',
+              background: 'rgba(61,186,98,0.12)', borderRadius: 3,
+            }}>
+              TL;DR
+            </span>
+            <p style={{ fontSize: '0.9rem', color: '#e4ede6', lineHeight: 1.5, margin: 0, fontWeight: 500 }}>
+              {insights.executive}
+            </p>
+          </div>
+        )}
 
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden' }}>
 
           {/* Row 1 — Project tracking */}
           <div style={{ display: 'flex', alignItems: 'flex-start', padding: '20px 20px', borderBottom: '1px solid #1a2c1d', gap: 20 }}>
             <div style={{ flex: 1 }}>
-              <p style={{ fontSize: '1rem', fontWeight: 700, color: '#e4ede6', marginBottom: 10 }}>AI Projects Initiative Tracking</p>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 10, flexWrap: 'wrap' }}>
+                <p style={{ fontSize: '1rem', fontWeight: 700, color: '#e4ede6', margin: 0 }}>AI Projects Initiative Tracking</p>
+                <HideCompletedToggle
+                  checked={hideCompleted}
+                  onChange={setHideCompleted}
+                  count={completedProjects.length}
+                />
+              </div>
 
               {/* Status pill row */}
               {!loading && (
@@ -350,7 +424,7 @@ export function OverviewPage() {
               )}
 
               <p style={{ fontSize: '0.875rem', color: '#8aad90', lineHeight: 1.7 }}>
-                {loading ? 'Loading…' : recs.tracking}
+                {loading ? 'Loading…' : (insightsLoading && !insights ? 'Analysing…' : insights?.tracking ?? '—')}
               </p>
 
               {/* High/urgent in-progress task chips */}
@@ -393,7 +467,7 @@ export function OverviewPage() {
             <div style={{ flex: 1 }}>
               <p style={{ fontSize: '1rem', fontWeight: 700, color: '#e4ede6', marginBottom: 8 }}>ROI & Impact Updates</p>
               <p style={{ fontSize: '0.875rem', color: '#8aad90', lineHeight: 1.7 }}>
-                {loading ? 'Loading…' : recs.roi}
+                {loading ? 'Loading…' : (insightsLoading && !insights ? 'Analysing…' : insights?.roi ?? '—')}
               </p>
             </div>
             <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexShrink: 0 }}>
@@ -413,7 +487,7 @@ export function OverviewPage() {
             <div style={{ flex: 1 }}>
               <p style={{ fontSize: '1rem', fontWeight: 700, color: '#e4ede6', marginBottom: 8 }}>Adoption</p>
               <p style={{ fontSize: '0.875rem', color: '#8aad90', lineHeight: 1.7 }}>
-                {loading ? 'Loading…' : recs.adoption}
+                {loading ? 'Loading…' : (insightsLoading && !insights ? 'Analysing…' : insights?.adoption ?? '—')}
               </p>
             </div>
             <div style={{ flexShrink: 0, textAlign: 'right' }}>
