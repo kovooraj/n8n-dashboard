@@ -1,6 +1,6 @@
 'use client';
 
-import { LayoutGrid, Zap, MessageSquare, Phone, Settings } from 'lucide-react';
+import { LayoutGrid, Zap, MessageSquare, Phone, Brain, Settings } from 'lucide-react';
 import type { PageId } from './Shell';
 
 interface NavItem {
@@ -20,6 +20,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
     { id: 'n8n', icon: <Zap size={18} />, label: 'N8N' },
     { id: 'fin', icon: <MessageSquare size={18} />, label: 'FIN' },
     { id: 'elevenlabs', icon: <Phone size={18} />, label: 'ElevenLabs' },
+    { id: 'ai-tools', icon: <Brain size={18} />, label: 'AI Tools' },
   ];
 
   return (
