@@ -62,10 +62,11 @@ export function OverviewPage() {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     const bust = `_t=${Date.now()}`;
+    const force = isRefresh ? '&refresh=1' : '';
     Promise.allSettled([
       fetch(`/api/notion/n8n?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
-      fetch(`/api/intercom/fin?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
-      fetch(`/api/elevenlabs/calls?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/intercom/fin?period=${period}&${bust}${force}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/elevenlabs/calls?period=${period}&${bust}${force}`, { cache: 'no-store' }).then((r) => r.json()),
       fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
       fetch(`/api/dashboard?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
     ]).then(([n8nResult, finResult, elResult, cuResult, dashResult]) => {

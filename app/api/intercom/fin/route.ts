@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { unstable_cache } from 'next/cache';
+import { unstable_cache, revalidateTag } from 'next/cache';
 import type { DashboardPeriod } from '@/lib/types';
 import { aggregate, type RawSnapshot, type Bucket, type Granularity } from '@/lib/aggregate';
 
@@ -31,10 +31,11 @@ const REVENUE_PER_HOUR = 20;
 // conversation end-to-end (i.e. not handed to a teammate).
 const RESOLVED_STATES = new Set(['assumed_resolution', 'confirmed_resolution']);
 
-// 5-minute revalidation — caches in Vercel Data Cache, shared across all
-// serverless instances. First request after expiry pays the Intercom cost;
-// every other request in that window is instant.
-const CACHE_REVALIDATE_SEC = 5 * 60;
+// 25-hour TTL — a Vercel cron hits this route once a day with ?refresh=1,
+// forcing a fresh upstream fetch. The extra hour of TTL past the 24h cron
+// interval means cached data stays available even if the cron runs late.
+const CACHE_REVALIDATE_SEC = 25 * 60 * 60;
+const CACHE_TAG = 'intercom-fin';
 
 const AGG_RULES = {
   finInvolvement: 'sum',
@@ -238,7 +239,7 @@ const getCachedDaily = unstable_cache(
     return buildDailySnapshots(convs);
   },
   ['intercom-fin-daily'],
-  { revalidate: CACHE_REVALIDATE_SEC, tags: ['intercom-fin'] },
+  { revalidate: CACHE_REVALIDATE_SEC, tags: [CACHE_TAG] },
 );
 
 export async function GET(request: NextRequest) {
@@ -254,6 +255,18 @@ export async function GET(request: NextRequest) {
   }
 
   const days = lookbackDays(period);
+
+  // Force a fresh upstream fetch when the Vercel cron hits us (user-agent
+  // starts with "vercel-cron") or when the UI explicitly requests it via
+  // ?refresh=1. Without this the cron would hit a still-valid cache and
+  // never actually refresh the data.
+  const ua = request.headers.get('user-agent') ?? '';
+  const isCron = ua.toLowerCase().startsWith('vercel-cron');
+  const forceRefresh = isCron || searchParams.get('refresh') === '1';
+  // "max" = stale-while-revalidate. The cron returns stale data instantly
+  // while the fresh fetch runs in the background, so by the time a real user
+  // loads the dashboard the cache is already updated.
+  if (forceRefresh) revalidateTag(CACHE_TAG, 'max');
 
   try {
     const daily = await getCachedDaily(days);

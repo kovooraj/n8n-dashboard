@@ -47,8 +47,9 @@ export function ElevenLabsPage() {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     const bust = `_t=${Date.now()}`;
+    const force = isRefresh ? '&refresh=1' : '';
     Promise.allSettled([
-      fetch(`/api/elevenlabs/calls?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/elevenlabs/calls?period=${period}&${bust}${force}`, { cache: 'no-store' }).then((r) => r.json()),
       fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
     ]).then(([elResult, cuResult]) => {
       if (elResult.status === 'fulfilled') {

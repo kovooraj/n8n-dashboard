@@ -5,12 +5,12 @@
   "installCommand": "npm install",
   "crons": [
     {
-      "path": "/api/intercom/fin?period=weekly",
-      "schedule": "*/4 * * * *"
+      "path": "/api/intercom/fin?period=weekly&refresh=1",
+      "schedule": "0 22 * * *"
     },
     {
-      "path": "/api/elevenlabs/calls?period=weekly",
-      "schedule": "*/4 * * * *"
+      "path": "/api/elevenlabs/calls?period=weekly&refresh=1",
+      "schedule": "0 22 * * *"
     }
   ]
 }

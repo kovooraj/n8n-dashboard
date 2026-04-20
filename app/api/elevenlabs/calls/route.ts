@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { unstable_cache } from 'next/cache';
+import { unstable_cache, revalidateTag } from 'next/cache';
 import type { DashboardPeriod } from '@/lib/types';
 import { aggregate, type RawSnapshot, type Bucket, type Granularity } from '@/lib/aggregate';
 
@@ -23,7 +23,9 @@ export const dynamic = 'force-dynamic';
 const EL_BASE = 'https://api.elevenlabs.io';
 const PAGE_SIZE = 100;
 
-const CACHE_REVALIDATE_SEC = 5 * 60;
+// 25-hour TTL — a Vercel cron refreshes this once a day via ?refresh=1.
+const CACHE_REVALIDATE_SEC = 25 * 60 * 60;
+const CACHE_TAG = 'elevenlabs-calls';
 
 const AGG_RULES = {
   calls: 'sum',
@@ -165,7 +167,7 @@ const getCachedDaily = unstable_cache(
     return buildDailySnapshots(convs);
   },
   ['elevenlabs-calls-daily'],
-  { revalidate: CACHE_REVALIDATE_SEC, tags: ['elevenlabs-calls'] },
+  { revalidate: CACHE_REVALIDATE_SEC, tags: [CACHE_TAG] },
 );
 
 export async function GET(request: NextRequest) {
@@ -181,6 +183,11 @@ export async function GET(request: NextRequest) {
   }
 
   const days = lookbackDays(period);
+
+  const ua = request.headers.get('user-agent') ?? '';
+  const isCron = ua.toLowerCase().startsWith('vercel-cron');
+  const forceRefresh = isCron || searchParams.get('refresh') === '1';
+  if (forceRefresh) revalidateTag(CACHE_TAG, 'max');
 
   try {
     const daily = await getCachedDaily(days);
