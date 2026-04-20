@@ -63,6 +63,12 @@ export function ElevenLabsPage() {
 
   const deflectionRate = totals ? Number((100 - totals.transferRate).toFixed(1)) : 0;
   const transferredCount = totals ? Math.round(totals.calls * (totals.transferRate / 100)) : 0;
+  const resolvedCount = totals ? Math.round(totals.calls * (1 - totals.transferRate / 100)) : 0;
+  // Hours saved = resolved calls × average call duration (seconds) ÷ 3600
+  const hoursSavedCalc = totals ? (resolvedCount * (totals.avgDuration ?? 0)) / 3600 : 0;
+  // Revenue impact = hours saved × $20/hr (loaded labour rate)
+  const REVENUE_PER_HOUR = 20;
+  const revenueImpactCalc = hoursSavedCalc * REVENUE_PER_HOUR;
 
   // Volume chart: total calls vs deflected (calls - transferred) per bucket
   const chartData: VolumePoint[] = buildVolumeFromBuckets(
@@ -120,10 +126,10 @@ export function ElevenLabsPage() {
         {/* KPI cards — 5 cards for ElevenLabs */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
           <BenchKPICard
-            label="Total # of Calls"
-            value={loading ? '—' : (totals?.calls ?? 0).toLocaleString()}
+            label="# of Calls Auto Resolved"
+            value={loading ? '—' : resolvedCount.toLocaleString()}
             showInfo
-            tooltip={`"ElevenLabs Calls" from the Notion database — count of inbound calls handled by the voice agent. Summed across daily rows in the selected ${period} window.`}
+            tooltip={`Calls handled end-to-end by the AI voice agent without transferring to a human: total calls × (100 − transfer rate). Total calls ${loading ? 0 : (totals?.calls ?? 0).toLocaleString()} × ${loading ? 0 : deflectionRate}% deflection for the ${period} window.`}
           />
           <BenchKPICard
             label="Transferred to Live Agent"
@@ -133,15 +139,15 @@ export function ElevenLabsPage() {
           />
           <BenchKPICard
             label="Estimated Hours Saved"
-            value={loading ? '—' : formatHours(totals?.hoursSaved ?? 0)}
+            value={loading ? '—' : formatHours(hoursSavedCalc)}
             showInfo
-            tooltip={`Notion formula "Total Hours Saved" for ElevenLabs: deflected calls × average human handle time per call. Summed over the ${period} window.`}
+            tooltip={`Resolved calls × average call duration (seconds) ÷ 3600. ${loading ? 0 : resolvedCount.toLocaleString()} resolved × ${loading ? 0 : (totals?.avgDuration ?? 0)}s avg duration for the ${period} window.`}
           />
           <BenchKPICard
             label="Estimated Revenue Impact"
-            value={loading ? '—' : formatCurrency(totals?.revenueImpact ?? 0)}
+            value={loading ? '—' : formatCurrency(revenueImpactCalc)}
             showInfo
-            tooltip={`Notion formula "Total Revenue Impact" for ElevenLabs: labour cost avoided on deflected calls + orders/bookings unlocked by 24/7 coverage. Summed over the ${period} window.`}
+            tooltip={`Hours saved × $${REVENUE_PER_HOUR}/hour (loaded labour rate). ${loading ? '0.0h' : formatHours(hoursSavedCalc)} × $${REVENUE_PER_HOUR} for the ${period} window.`}
           />
           <BenchKPICard
             label="CSAT Score"
