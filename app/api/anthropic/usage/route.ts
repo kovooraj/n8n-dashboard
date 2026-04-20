@@ -1,37 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { unstable_cache, revalidateTag } from 'next/cache';
 import type { DashboardPeriod } from '@/lib/types';
-import { TEAM, lookupMember, type Company } from '@/lib/aiToolsTeam';
+import type { Company } from '@/lib/aiToolsTeam';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
 /**
- * Claude usage aggregated per user → per department, sourced from the
- * Anthropic Admin API.
+ * Claude usage per department via Anthropic workspaces.
  *
- *   GET /v1/organizations/usage_report/messages
- *     ?starting_at=<ISO>&ending_at=<ISO>&bucket_width=1d
- *     &group_by[]=actor_email_address
+ * Strategy:
+ *   1. List workspaces — /v1/organizations/workspaces
+ *   2. Usage per workspace — /v1/organizations/usage_report/messages?group_by[]=workspace_id
+ *   3. Cost per workspace — /v1/organizations/cost_report?group_by[]=workspace_id
+ *   4. Parse workspace name into { department, company } via convention:
  *
- *   GET /v1/organizations/cost_report
- *     (same window, returns USD cost per bucket)
+ *        "Marketing · SinaLite"        → dept: Marketing, company: sinalite
+ *        "Marketing — Willowpack"      → dept: Marketing, company: willowpack
+ *        "Dev Team - Both"             → dept: Dev Team,  company: both
+ *        "Engineering"                 → dept: Engineering, company: both (default)
  *
- * Requires an Admin API key (sk-ant-admin01-...) created at
- * console.anthropic.com/settings/admin-keys by an org Owner.
+ *   Accepted separators: ·, —, -, |, /  (whitespace around is OK)
+ *   Company tokens: sinalite, sl, willowpack, wp, both, all
  *
- * Response shape matches AIToolsPage expectations:
- *   {
- *     rows: [{ email, name, department, companies[], conversations,
- *              inputTokens, outputTokens, costUsd }],
- *     totals: { conversations, users, inputTokens, outputTokens, costUsd },
- *     unmatched: [{ email, conversations, inputTokens, outputTokens }],
- *     source: 'anthropic' | 'mock',
- *   }
+ *   Anything else falls into an "Unmapped" bucket so it's visible in the UI.
  */
 
 const ANTHROPIC_BASE = 'https://api.anthropic.com';
-const CACHE_REVALIDATE_SEC = 25 * 60 * 60; // 25h — daily cron refreshes
+const CACHE_REVALIDATE_SEC = 25 * 60 * 60;
 const CACHE_TAG = 'anthropic-usage';
 
 function lookbackDays(period: DashboardPeriod): number {
@@ -43,29 +39,37 @@ function lookbackDays(period: DashboardPeriod): number {
   }
 }
 
-interface UsageBucketEntry {
-  api_key_id?: string;
-  workspace_id?: string;
-  model?: string;
+interface Workspace {
+  id: string;
+  name: string;
+  archived_at?: string | null;
+}
+interface WorkspaceListResp {
+  data?: Workspace[];
+  has_more?: boolean;
+  next_page?: string | null;
+}
+
+interface UsageEntry {
+  workspace_id?: string | null;
   input_tokens?: number;
   output_tokens?: number;
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
-  server_tool_use?: unknown;
 }
 interface UsageBucket {
   starting_at?: string;
   ending_at?: string;
-  results?: UsageBucketEntry[];
+  results?: UsageEntry[];
 }
-interface UsageReportResponse {
+interface UsageReportResp {
   data?: UsageBucket[];
   has_more?: boolean;
   next_page?: string | null;
 }
 
 interface CostEntry {
-  workspace_id?: string;
+  workspace_id?: string | null;
   amount?: number;
   currency?: string;
 }
@@ -73,7 +77,7 @@ interface CostBucket {
   starting_at?: string;
   results?: CostEntry[];
 }
-interface CostReportResponse {
+interface CostReportResp {
   data?: CostBucket[];
   has_more?: boolean;
   next_page?: string | null;
@@ -95,56 +99,69 @@ async function anthropicGet<T>(path: string, adminKey: string): Promise<T> {
   return (await resp.json()) as T;
 }
 
-async function fetchAllUsage(adminKey: string, startingAt: string, endingAt: string) {
+async function fetchWorkspaces(adminKey: string): Promise<Workspace[]> {
+  const out: Workspace[] = [];
+  let cursor: string | null = null;
+  let guard = 0;
+  while (guard++ < 20) {
+    const params = new URLSearchParams();
+    params.set('limit', '100');
+    if (cursor) params.set('page', cursor);
+    const data = await anthropicGet<WorkspaceListResp>(
+      `/v1/organizations/workspaces?${params.toString()}`,
+      adminKey,
+    );
+    if (data.data) out.push(...data.data);
+    if (!data.has_more || !data.next_page) break;
+    cursor = data.next_page;
+  }
+  return out.filter((w) => !w.archived_at);
+}
+
+async function fetchUsageByWorkspace(adminKey: string, startingAt: string, endingAt: string) {
   const buckets: UsageBucket[] = [];
   let cursor: string | null = null;
   let guard = 0;
-
-  while (guard++ < 100) {
+  while (guard++ < 50) {
     const params = new URLSearchParams();
     params.set('starting_at', startingAt);
     params.set('ending_at', endingAt);
     params.set('bucket_width', '1d');
-    // Admin API doesn't expose actor_email_address; the valid group_by options
-    // are api_key_id, workspace_id, model, etc. We aggregate org-wide totals
-    // and surface them as a global org usage readout.
+    params.append('group_by[]', 'workspace_id');
     params.set('limit', '1000');
     if (cursor) params.set('page', cursor);
-
-    const data = await anthropicGet<UsageReportResponse>(
+    const data = await anthropicGet<UsageReportResp>(
       `/v1/organizations/usage_report/messages?${params.toString()}`,
       adminKey,
     );
-    if (Array.isArray(data.data)) buckets.push(...data.data);
+    if (data.data) buckets.push(...data.data);
     if (!data.has_more || !data.next_page) break;
     cursor = data.next_page;
   }
   return buckets;
 }
 
-async function fetchAllCost(adminKey: string, startingAt: string, endingAt: string) {
+async function fetchCostByWorkspace(adminKey: string, startingAt: string, endingAt: string) {
   const buckets: CostBucket[] = [];
   let cursor: string | null = null;
   let guard = 0;
-
-  while (guard++ < 100) {
+  while (guard++ < 50) {
     const params = new URLSearchParams();
     params.set('starting_at', startingAt);
     params.set('ending_at', endingAt);
     params.set('bucket_width', '1d');
+    params.append('group_by[]', 'workspace_id');
     params.set('limit', '1000');
     if (cursor) params.set('page', cursor);
-
     try {
-      const data = await anthropicGet<CostReportResponse>(
+      const data = await anthropicGet<CostReportResp>(
         `/v1/organizations/cost_report?${params.toString()}`,
         adminKey,
       );
-      if (Array.isArray(data.data)) buckets.push(...data.data);
+      if (data.data) buckets.push(...data.data);
       if (!data.has_more || !data.next_page) break;
       cursor = data.next_page;
     } catch (err) {
-      // Cost report can be gated separately — log and return what we have.
       console.warn('[anthropic/usage] cost_report failed:', err);
       break;
     }
@@ -152,115 +169,161 @@ async function fetchAllCost(adminKey: string, startingAt: string, endingAt: stri
   return buckets;
 }
 
-interface TeamRow {
-  email: string;
-  name: string;
+/** Parse a workspace name into department + companies. */
+function parseWorkspaceName(name: string): { department: string; companies: Company[] } {
+  const separators = /[·—–\-|/]+/;
+  const parts = name.split(separators).map((p) => p.trim()).filter(Boolean);
+
+  if (parts.length === 0) {
+    return { department: name || 'Unmapped', companies: ['sinalite', 'willowpack'] };
+  }
+
+  const department = parts[0] || 'Unmapped';
+  const companyToken = (parts[1] ?? '').toLowerCase();
+
+  let companies: Company[] = ['sinalite', 'willowpack']; // default: both
+  if (companyToken) {
+    if (companyToken.startsWith('sinalite') || companyToken === 'sl') {
+      companies = ['sinalite'];
+    } else if (companyToken.startsWith('willow') || companyToken === 'wp') {
+      companies = ['willowpack'];
+    } else if (companyToken === 'both' || companyToken === 'all') {
+      companies = ['sinalite', 'willowpack'];
+    }
+  }
+  return { department, companies };
+}
+
+interface DeptRow {
   department: string;
+  workspaceName: string;
+  workspaceId: string;
   companies: Company[];
-  conversations: number;
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  activeDays: number;
 }
 
-interface UsagePayload {
-  rows: TeamRow[]; // roster seats (zeroed — per-user not exposed by Admin API)
+interface Payload {
+  rows: DeptRow[];
   orgTotals: {
     inputTokens: number;
     outputTokens: number;
     costUsd: number;
     activeDays: number;
+    workspacesWithActivity: number;
   };
-  totals: {
-    conversations: number;
-    users: number;
-    inputTokens: number;
-    outputTokens: number;
-    costUsd: number;
-  };
+  workspaces: { id: string; name: string; department: string; companies: Company[] }[];
   source: 'anthropic';
-  limitations: {
-    perUser: boolean; // true = Admin API cannot break down usage per user/email
-    note: string;
-  };
   window: { startingAt: string; endingAt: string };
 }
 
-async function buildPayload(adminKey: string, days: number): Promise<UsagePayload> {
+async function buildPayload(adminKey: string, days: number): Promise<Payload> {
   const endingAt = new Date().toISOString();
   const startingAt = new Date(Date.now() - days * 86400 * 1000).toISOString();
 
-  const [usageBuckets, costBuckets] = await Promise.all([
-    fetchAllUsage(adminKey, startingAt, endingAt),
-    fetchAllCost(adminKey, startingAt, endingAt),
+  const [workspaces, usageBuckets, costBuckets] = await Promise.all([
+    fetchWorkspaces(adminKey),
+    fetchUsageByWorkspace(adminKey, startingAt, endingAt),
+    fetchCostByWorkspace(adminKey, startingAt, endingAt),
   ]);
 
-  // Aggregate org-wide totals from daily buckets.
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let costUsd = 0;
-  const activeDaySet = new Set<string>();
+  const wsById = new Map(workspaces.map((w) => [w.id, w]));
 
+  // Aggregate tokens and active-day sets per workspace
+  const tokensByWs = new Map<string, { inputTokens: number; outputTokens: number; days: Set<string> }>();
   for (const b of usageBuckets) {
-    let bucketHasActivity = false;
+    const day = b.starting_at?.slice(0, 10) ?? '';
     for (const r of b.results ?? []) {
+      const wsId = r.workspace_id ?? '__default__';
+      const cur = tokensByWs.get(wsId) ?? { inputTokens: 0, outputTokens: 0, days: new Set<string>() };
       const inT = (r.input_tokens ?? 0) + (r.cache_creation_input_tokens ?? 0) + (r.cache_read_input_tokens ?? 0);
       const outT = r.output_tokens ?? 0;
-      inputTokens += inT;
-      outputTokens += outT;
-      if (inT > 0 || outT > 0) bucketHasActivity = true;
-    }
-    if (bucketHasActivity && b.starting_at) {
-      activeDaySet.add(b.starting_at.slice(0, 10));
+      cur.inputTokens += inT;
+      cur.outputTokens += outT;
+      if (day && (inT > 0 || outT > 0)) cur.days.add(day);
+      tokensByWs.set(wsId, cur);
     }
   }
+
+  const costByWs = new Map<string, number>();
   for (const b of costBuckets) {
     for (const r of b.results ?? []) {
-      costUsd += r.amount ?? 0;
+      const wsId = r.workspace_id ?? '__default__';
+      costByWs.set(wsId, (costByWs.get(wsId) ?? 0) + (r.amount ?? 0));
     }
   }
 
-  // Roster seats are returned with zeros — Admin API can't attribute usage
-  // per user. Keeping the shape lets the UI show the mapping we already have.
-  void lookupMember; // silence unused import — kept for future per-key mapping
-  const rows: TeamRow[] = TEAM.map((m) => ({
-    email: m.email,
-    name: m.name,
-    department: m.department,
-    companies: m.companies,
-    conversations: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    costUsd: 0,
-  }));
+  // Build department rows. Use both workspace list and any workspace IDs
+  // that appeared in usage (in case one is missing from the list call).
+  const allWsIds = new Set<string>([...wsById.keys(), ...tokensByWs.keys(), ...costByWs.keys()]);
+
+  const rows: DeptRow[] = [];
+  for (const wsId of allWsIds) {
+    const ws = wsById.get(wsId);
+    const name = ws?.name ?? (wsId === '__default__' ? 'Default workspace' : `Workspace ${wsId.slice(0, 8)}`);
+    const { department, companies } = parseWorkspaceName(name);
+    const tk = tokensByWs.get(wsId);
+    rows.push({
+      department,
+      workspaceName: name,
+      workspaceId: wsId,
+      companies,
+      inputTokens: tk?.inputTokens ?? 0,
+      outputTokens: tk?.outputTokens ?? 0,
+      costUsd: costByWs.get(wsId) ?? 0,
+      activeDays: tk?.days.size ?? 0,
+    });
+  }
+
+  // Merge rows that resolve to the same department + company signature
+  // (e.g., two workspaces both named "Marketing · SinaLite" should stack).
+  const mergedMap = new Map<string, DeptRow>();
+  for (const r of rows) {
+    const key = `${r.department}::${r.companies.slice().sort().join(',')}`;
+    const cur = mergedMap.get(key);
+    if (!cur) {
+      mergedMap.set(key, { ...r });
+    } else {
+      cur.inputTokens += r.inputTokens;
+      cur.outputTokens += r.outputTokens;
+      cur.costUsd += r.costUsd;
+      cur.activeDays = Math.max(cur.activeDays, r.activeDays);
+      cur.workspaceName = `${cur.workspaceName} + ${r.workspaceName}`;
+    }
+  }
+  const merged = Array.from(mergedMap.values()).sort(
+    (a, b) => (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens),
+  );
+
+  const orgTotals = merged.reduce(
+    (acc, r) => {
+      acc.inputTokens += r.inputTokens;
+      acc.outputTokens += r.outputTokens;
+      acc.costUsd += r.costUsd;
+      acc.activeDays = Math.max(acc.activeDays, r.activeDays);
+      if (r.inputTokens + r.outputTokens > 0) acc.workspacesWithActivity += 1;
+      return acc;
+    },
+    { inputTokens: 0, outputTokens: 0, costUsd: 0, activeDays: 0, workspacesWithActivity: 0 },
+  );
 
   return {
-    rows,
-    orgTotals: {
-      inputTokens,
-      outputTokens,
-      costUsd,
-      activeDays: activeDaySet.size,
-    },
-    totals: {
-      conversations: 0,
-      users: 0,
-      inputTokens,
-      outputTokens,
-      costUsd,
-    },
+    rows: merged,
+    orgTotals,
+    workspaces: workspaces.map((w) => {
+      const { department, companies } = parseWorkspaceName(w.name);
+      return { id: w.id, name: w.name, department, companies };
+    }),
     source: 'anthropic',
-    limitations: {
-      perUser: false,
-      note: 'Anthropic Admin API exposes org-level totals only. Per-user attribution for Claude.ai requires the CSV export from console.anthropic.com → Usage.',
-    },
     window: { startingAt, endingAt },
   };
 }
 
 const getCached = unstable_cache(
   async (days: number, adminKey: string) => buildPayload(adminKey, days),
-  ['anthropic-usage-v1'],
+  ['anthropic-usage-v2-workspaces'],
   { revalidate: CACHE_REVALIDATE_SEC, tags: [CACHE_TAG] },
 );
 
