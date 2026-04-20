@@ -48,7 +48,7 @@ export function FINPage() {
     else setLoading(true);
     const bust = `_t=${Date.now()}`;
     Promise.allSettled([
-      fetch(`/api/notion/fin?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/intercom/fin?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
       fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
     ]).then(([finResult, cuResult]) => {
       if (finResult.status === 'fulfilled') {

@@ -64,8 +64,8 @@ export function OverviewPage() {
     const bust = `_t=${Date.now()}`;
     Promise.allSettled([
       fetch(`/api/notion/n8n?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
-      fetch(`/api/notion/fin?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
-      fetch(`/api/notion/elevenlabs?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/intercom/fin?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/elevenlabs/calls?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
       fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
       fetch(`/api/dashboard?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
     ]).then(([n8nResult, finResult, elResult, cuResult, dashResult]) => {

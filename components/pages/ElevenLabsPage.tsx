@@ -48,7 +48,7 @@ export function ElevenLabsPage() {
     else setLoading(true);
     const bust = `_t=${Date.now()}`;
     Promise.allSettled([
-      fetch(`/api/notion/elevenlabs?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/elevenlabs/calls?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
       fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
     ]).then(([elResult, cuResult]) => {
       if (elResult.status === 'fulfilled') {
