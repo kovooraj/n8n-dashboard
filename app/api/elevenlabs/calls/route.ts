@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { unstable_cache } from 'next/cache';
 import type { DashboardPeriod } from '@/lib/types';
 import { aggregate, type RawSnapshot, type Bucket, type Granularity } from '@/lib/aggregate';
-import { createTTLCache } from '@/lib/ttlCache';
 
+export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
-export const revalidate = 0;
 
 /**
  * Call metrics sourced directly from the ElevenLabs Conversational AI API.
@@ -23,8 +23,7 @@ export const revalidate = 0;
 const EL_BASE = 'https://api.elevenlabs.io';
 const PAGE_SIZE = 100;
 
-const CACHE_TTL_MS = 10 * 60 * 1000;
-const cache = createTTLCache<RawSnapshot[]>(CACHE_TTL_MS);
+const CACHE_REVALIDATE_SEC = 5 * 60;
 
 const AGG_RULES = {
   calls: 'sum',
@@ -157,13 +156,24 @@ function buildDailySnapshots(convs: ELConversation[]): RawSnapshot[] {
   return out.sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
+const getCachedDaily = unstable_cache(
+  async (days: number): Promise<RawSnapshot[]> => {
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    if (!apiKey) throw new Error('ELEVENLABS_API_KEY not set');
+    const afterUnix = Math.floor(Date.now() / 1000) - days * 86400;
+    const convs = await fetchConversations(apiKey, afterUnix);
+    return buildDailySnapshots(convs);
+  },
+  ['elevenlabs-calls-daily'],
+  { revalidate: CACHE_REVALIDATE_SEC, tags: ['elevenlabs-calls'] },
+);
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const period = (searchParams.get('period') ?? 'weekly') as DashboardPeriod;
   const now = new Date();
 
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) {
+  if (!process.env.ELEVENLABS_API_KEY) {
     return NextResponse.json(
       { error: 'ELEVENLABS_API_KEY not set' },
       { status: 500, headers: { 'Cache-Control': 'no-store' } },
@@ -171,17 +181,9 @@ export async function GET(request: NextRequest) {
   }
 
   const days = lookbackDays(period);
-  const cacheKey = `elevenlabs:${days}`;
 
   try {
-    let daily = cache.get(cacheKey);
-    if (!daily) {
-      const afterUnix = Math.floor(Date.now() / 1000) - days * 86400;
-      const convs = await fetchConversations(apiKey, afterUnix);
-      daily = buildDailySnapshots(convs);
-      cache.set(cacheKey, daily);
-    }
-
+    const daily = await getCachedDaily(days);
     const { buckets, totals, granularity } = aggregate(daily, period, AGG_RULES, now);
     return mkResponse(buckets, totals, granularity);
   } catch (err) {

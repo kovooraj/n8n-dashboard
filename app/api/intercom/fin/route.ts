@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { unstable_cache } from 'next/cache';
 import type { DashboardPeriod } from '@/lib/types';
 import { aggregate, type RawSnapshot, type Bucket, type Granularity } from '@/lib/aggregate';
-import { createTTLCache } from '@/lib/ttlCache';
 
+// Allow the first (cold) fetch to complete on Vercel Pro (max 300s).
+// Subsequent calls in the 5-min window are served from Data Cache and are instant.
+export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
-export const revalidate = 0;
 
 /**
  * FIN metrics sourced directly from the Intercom Conversations API.
@@ -29,9 +31,10 @@ const REVENUE_PER_HOUR = 20;
 // conversation end-to-end (i.e. not handed to a teammate).
 const RESOLVED_STATES = new Set(['assumed_resolution', 'confirmed_resolution']);
 
-// 10-minute cache — dashboard refreshes are cheap, upstream stays calm.
-const CACHE_TTL_MS = 10 * 60 * 1000;
-const cache = createTTLCache<RawSnapshot[]>(CACHE_TTL_MS);
+// 5-minute revalidation — caches in Vercel Data Cache, shared across all
+// serverless instances. First request after expiry pays the Intercom cost;
+// every other request in that window is instant.
+const CACHE_REVALIDATE_SEC = 5 * 60;
 
 const AGG_RULES = {
   finInvolvement: 'sum',
@@ -72,20 +75,26 @@ function lookbackDays(period: DashboardPeriod): number {
   }
 }
 
-async function fetchConversations(
+/**
+ * Fetch all Intercom conversations created in [fromUnix, toUnix) with cursor
+ * pagination. Used as the per-chunk worker in the parallel fetcher below.
+ */
+async function fetchConversationsRange(
   token: string,
-  afterUnix: number,
+  fromUnix: number,
+  toUnix: number,
 ): Promise<IntercomConversation[]> {
   const out: IntercomConversation[] = [];
   let cursor: string | undefined;
   let guard = 0;
 
-  while (guard++ < 500) { // hard cap — 500 pages × 150 = 75k convs
+  while (guard++ < 500) {
     const body = {
       query: {
         operator: 'AND',
         value: [
-          { field: 'created_at', operator: '>', value: afterUnix },
+          { field: 'created_at', operator: '>', value: fromUnix },
+          { field: 'created_at', operator: '<', value: toUnix },
         ],
       },
       pagination: {
@@ -120,6 +129,40 @@ async function fetchConversations(
   }
 
   return out;
+}
+
+/**
+ * Split the full lookback window into N equal chunks and fetch them in
+ * parallel. Each chunk paginates independently, which cuts first-load latency
+ * roughly N× vs sequential pagination across one big window.
+ */
+async function fetchConversations(
+  token: string,
+  afterUnix: number,
+): Promise<IntercomConversation[]> {
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const totalSec = nowUnix - afterUnix;
+  // 6 chunks is a sweet spot vs Intercom's 166-req/min rate limit.
+  const CHUNKS = 6;
+  const chunkSec = Math.ceil(totalSec / CHUNKS);
+
+  const ranges: Array<[number, number]> = [];
+  for (let i = 0; i < CHUNKS; i++) {
+    const from = afterUnix + i * chunkSec;
+    const to = i === CHUNKS - 1 ? nowUnix + 1 : afterUnix + (i + 1) * chunkSec;
+    ranges.push([from, to]);
+  }
+
+  const results = await Promise.all(
+    ranges.map(([from, to]) => fetchConversationsRange(token, from, to)),
+  );
+
+  // Dedupe by id (boundary convs can appear in two chunks if created exactly on the edge)
+  const byId = new Map<string, IntercomConversation>();
+  for (const chunk of results) {
+    for (const c of chunk) byId.set(c.id, c);
+  }
+  return [...byId.values()];
 }
 
 function toISODay(unixSec: number): string {
@@ -180,13 +223,30 @@ function buildDailySnapshots(convs: IntercomConversation[]): RawSnapshot[] {
   return out.sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
+/**
+ * Persistently-cached daily snapshot builder. `unstable_cache` keys by the
+ * function arguments (days) and stores results in Vercel Data Cache, so a
+ * cold serverless invocation in any region will still get a cache hit if a
+ * recent request has populated the cache.
+ */
+const getCachedDaily = unstable_cache(
+  async (days: number): Promise<RawSnapshot[]> => {
+    const token = process.env.INTERCOM_ACCESS_TOKEN;
+    if (!token) throw new Error('INTERCOM_ACCESS_TOKEN not set');
+    const afterUnix = Math.floor(Date.now() / 1000) - days * 86400;
+    const convs = await fetchConversations(token, afterUnix);
+    return buildDailySnapshots(convs);
+  },
+  ['intercom-fin-daily'],
+  { revalidate: CACHE_REVALIDATE_SEC, tags: ['intercom-fin'] },
+);
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const period = (searchParams.get('period') ?? 'weekly') as DashboardPeriod;
   const now = new Date();
 
-  const token = process.env.INTERCOM_ACCESS_TOKEN;
-  if (!token) {
+  if (!process.env.INTERCOM_ACCESS_TOKEN) {
     return NextResponse.json(
       { error: 'INTERCOM_ACCESS_TOKEN not set' },
       { status: 500, headers: { 'Cache-Control': 'no-store' } },
@@ -194,17 +254,9 @@ export async function GET(request: NextRequest) {
   }
 
   const days = lookbackDays(period);
-  const cacheKey = `intercom:${days}`;
 
   try {
-    let daily = cache.get(cacheKey);
-    if (!daily) {
-      const afterUnix = Math.floor(Date.now() / 1000) - days * 86400;
-      const convs = await fetchConversations(token, afterUnix);
-      daily = buildDailySnapshots(convs);
-      cache.set(cacheKey, daily);
-    }
-
+    const daily = await getCachedDaily(days);
     const { buckets, totals, granularity } = aggregate(daily, period, AGG_RULES, now);
     return mkResponse(buckets, totals, granularity);
   } catch (err) {
