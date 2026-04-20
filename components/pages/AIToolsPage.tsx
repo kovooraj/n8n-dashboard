@@ -34,6 +34,12 @@ interface TeamRow {
 
 interface UsagePayload {
   rows: TeamRow[];
+  orgTotals?: {
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    activeDays: number;
+  };
   totals: {
     conversations: number;
     users: number;
@@ -41,8 +47,8 @@ interface UsagePayload {
     outputTokens: number;
     costUsd: number;
   };
-  unmatched: { email: string; conversations: number }[];
   source: 'anthropic';
+  limitations?: { perUser: boolean; note: string };
 }
 
 function SectionHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
@@ -117,6 +123,8 @@ export function AIToolsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState<'anthropic' | 'none'>('none');
+  const [orgTotals, setOrgTotals] = useState<UsagePayload['orgTotals']>(undefined);
+  const [limitations, setLimitations] = useState<UsagePayload['limitations']>(undefined);
 
   const fetchUsage = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -133,11 +141,12 @@ export function AIToolsPage() {
         return;
       }
       const data: UsagePayload = await resp.json();
-      // Merge API rows onto the full roster so unused seats still appear.
       const byEmail = new Map(data.rows.map((r) => [r.email.toLowerCase(), r]));
       const merged = SEED_ROWS.map((s) => byEmail.get(s.email.toLowerCase()) ?? s);
       setRows(merged);
       setSource(data.source);
+      setOrgTotals(data.orgTotals);
+      setLimitations(data.limitations);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Fetch failed');
       setRows(SEED_ROWS);
@@ -156,11 +165,21 @@ export function AIToolsPage() {
     [rows, company],
   );
 
-  const totalConversations = filteredRows.reduce((s, r) => s + r.conversations, 0);
+  // Per-user data isn't exposed by the Anthropic Admin API, so for now we
+  // display org-wide totals (API-only) and keep the roster for the mapping
+  // view. Totals below fall back to per-row aggregation only if the server
+  // ever starts returning real per-user numbers.
+  const perRowConv = filteredRows.reduce((s, r) => s + r.conversations, 0);
+  const perRowTokens = filteredRows.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
+  const perRowCost = filteredRows.reduce((s, r) => s + r.costUsd, 0);
+
+  const totalTokens = (orgTotals?.inputTokens ?? 0) + (orgTotals?.outputTokens ?? 0) || perRowTokens;
+  const totalCost = orgTotals?.costUsd ?? perRowCost;
+  const activeDays = orgTotals?.activeDays ?? 0;
   const activeUsers = filteredRows.filter((r) => r.conversations > 0).length;
-  const totalTokens = filteredRows.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
-  const totalCost = filteredRows.reduce((s, r) => s + r.costUsd, 0);
-  const hoursSaved = (totalConversations * 15) / 60;
+  // Rough "conversations" proxy: tokens / 2000 (a chat-sized message).
+  const conversationsProxy = totalTokens > 0 ? Math.round(totalTokens / 2000) : perRowConv;
+  const hoursSaved = (conversationsProxy * 15) / 60;
   const revenueImpact = hoursSaved * 20;
   const maxConv = Math.max(1, ...deptRows.map((d) => d.conversations));
 
@@ -266,19 +285,19 @@ export function AIToolsPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
             <BenchKPICard
-              label="Active Days of Use"
-              value={loading ? '—' : totalConversations.toLocaleString()}
+              label="Active Days"
+              value={loading ? '—' : activeDays}
               showInfo
-              tooltip={`Sum of user-days with at least one Claude API call in the ${period} window. Pulled from Anthropic's Admin Usage Report grouped by actor_email_address. (Claude.ai doesn't expose per-conversation counts via API — this is the closest stand-in.)`}
+              tooltip={`Days within the ${period} window that had any Claude API activity across the org. Pulled from Anthropic's Admin Usage Report.`}
             />
             <BenchKPICard
-              label="Active Users"
-              value={loading ? '—' : activeUsers}
+              label="Seats on Roster"
+              value={loading ? '—' : filteredRows.length}
               showInfo
-              tooltip="Distinct mapped team members with at least one Claude call in the window. Unmapped activity is tracked separately in the API response for later triage."
+              tooltip="Team members mapped to departments in lib/aiToolsTeam.ts. Per-user attribution for Claude.ai isn't exposed by the Admin API yet — this is the seat list only."
               subBadge={
                 <span style={{ fontSize: '0.65rem', color: '#6a8870', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Users size={10} /> {activeUsers}/{filteredRows.length} seats active
+                  <Users size={10} /> {filteredRows.length} mapped
                 </span>
               }
             />
@@ -286,18 +305,18 @@ export function AIToolsPage() {
               label="Estimated Hours Saved"
               value={loading ? '—' : formatHours(hoursSaved)}
               showInfo
-              tooltip="Active user-days × 15 min ÷ 60. Flat model for now — will be tuned per department once we have enough data to benchmark."
+              tooltip="Tokens ÷ 2,000 ≈ conversation proxy, × 15 min ÷ 60. Rough heuristic because Claude.ai doesn't report per-conversation counts."
             />
             <BenchKPICard
-              label="Estimated Revenue Impact"
-              value={loading ? '—' : formatCurrency(revenueImpact)}
+              label="Anthropic Spend"
+              value={loading ? '—' : formatCurrency(totalCost)}
               showInfo
-              tooltip={`Hours saved × $20/hr. ${totalCost > 0 ? `Anthropic spend in window: ${formatCurrency(totalCost)}.` : ''}`}
-              subBadge={totalCost > 0 ? (
+              tooltip={`Live org-wide spend from /v1/organizations/cost_report in the ${period} window. Estimated revenue impact from hours saved: ${formatCurrency(revenueImpact)}.`}
+              subBadge={
                 <span style={{ fontSize: '0.65rem', color: '#6a8870' }}>
-                  Spend: {formatCurrency(totalCost)}
+                  Impact: {formatCurrency(revenueImpact)}
                 </span>
-              ) : undefined}
+              }
             />
           </div>
 
@@ -307,7 +326,17 @@ export function AIToolsPage() {
             </p>
           </div>
 
-          <SectionHeader eyebrow="2. DEPARTMENT BREAKDOWN" title="Usage by department" />
+          {limitations && !limitations.perUser && (
+            <div style={{
+              background: 'rgba(74,158,202,0.08)', border: '1px solid rgba(74,158,202,0.3)',
+              borderRadius: 8, padding: '10px 14px', marginBottom: 20,
+              fontSize: '0.75rem', color: '#8aad90',
+            }}>
+              <strong style={{ color: '#b8d4bd' }}>Note:</strong> Anthropic&apos;s Admin API only exposes org-wide totals — per-user and per-department breakdowns aren&apos;t available via API yet. To see who&apos;s using what, export the CSV from <a href="https://console.anthropic.com/settings/usage" target="_blank" rel="noopener noreferrer" style={{ color: '#4a9eca' }}>console.anthropic.com → Usage</a>.
+            </div>
+          )}
+
+          <SectionHeader eyebrow="2. DEPARTMENT BREAKDOWN" title="Department mapping" />
 
           <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 0.6fr 1fr 1.2fr 1fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
@@ -353,7 +382,7 @@ export function AIToolsPage() {
             )}
           </div>
 
-          <SectionHeader eyebrow="3. SEAT ROSTER" title="Per-user activity" />
+          <SectionHeader eyebrow="3. SEAT ROSTER" title="Mapped team members" />
 
           <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 0.8fr 1fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>

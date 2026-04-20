@@ -44,7 +44,9 @@ function lookbackDays(period: DashboardPeriod): number {
 }
 
 interface UsageBucketEntry {
-  actor_email_address?: string;
+  api_key_id?: string;
+  workspace_id?: string;
+  model?: string;
   input_tokens?: number;
   output_tokens?: number;
   cache_creation_input_tokens?: number;
@@ -63,7 +65,7 @@ interface UsageReportResponse {
 }
 
 interface CostEntry {
-  actor_email_address?: string;
+  workspace_id?: string;
   amount?: number;
   currency?: string;
 }
@@ -103,7 +105,9 @@ async function fetchAllUsage(adminKey: string, startingAt: string, endingAt: str
     params.set('starting_at', startingAt);
     params.set('ending_at', endingAt);
     params.set('bucket_width', '1d');
-    params.append('group_by[]', 'actor_email_address');
+    // Admin API doesn't expose actor_email_address; the valid group_by options
+    // are api_key_id, workspace_id, model, etc. We aggregate org-wide totals
+    // and surface them as a global org usage readout.
     params.set('limit', '1000');
     if (cursor) params.set('page', cursor);
 
@@ -128,7 +132,6 @@ async function fetchAllCost(adminKey: string, startingAt: string, endingAt: stri
     params.set('starting_at', startingAt);
     params.set('ending_at', endingAt);
     params.set('bucket_width', '1d');
-    params.append('group_by[]', 'actor_email_address');
     params.set('limit', '1000');
     if (cursor) params.set('page', cursor);
 
@@ -149,48 +152,6 @@ async function fetchAllCost(adminKey: string, startingAt: string, endingAt: stri
   return buckets;
 }
 
-interface UserAgg {
-  email: string;
-  conversations: number;
-  inputTokens: number;
-  outputTokens: number;
-  costUsd: number;
-}
-
-function aggregateByUser(
-  usageBuckets: UsageBucket[],
-  costBuckets: CostBucket[],
-): Map<string, UserAgg> {
-  const byUser = new Map<string, UserAgg>();
-
-  for (const b of usageBuckets) {
-    for (const r of b.results ?? []) {
-      const email = (r.actor_email_address ?? '').toLowerCase();
-      if (!email) continue;
-      const cur = byUser.get(email) ?? { email, conversations: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
-      // "conversations" proxy: number of daily buckets with activity for that user.
-      // Admin API doesn't expose conversation count directly for Claude.ai; this is
-      // a pragmatic stand-in ("days active"). Swap for request_count if exposed.
-      cur.conversations += 1;
-      cur.inputTokens += (r.input_tokens ?? 0) + (r.cache_creation_input_tokens ?? 0) + (r.cache_read_input_tokens ?? 0);
-      cur.outputTokens += r.output_tokens ?? 0;
-      byUser.set(email, cur);
-    }
-  }
-
-  for (const b of costBuckets) {
-    for (const r of b.results ?? []) {
-      const email = (r.actor_email_address ?? '').toLowerCase();
-      if (!email) continue;
-      const cur = byUser.get(email);
-      if (!cur) continue;
-      cur.costUsd += r.amount ?? 0;
-    }
-  }
-
-  return byUser;
-}
-
 interface TeamRow {
   email: string;
   name: string;
@@ -203,7 +164,13 @@ interface TeamRow {
 }
 
 interface UsagePayload {
-  rows: TeamRow[];
+  rows: TeamRow[]; // roster seats (zeroed — per-user not exposed by Admin API)
+  orgTotals: {
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    activeDays: number;
+  };
   totals: {
     conversations: number;
     users: number;
@@ -211,8 +178,11 @@ interface UsagePayload {
     outputTokens: number;
     costUsd: number;
   };
-  unmatched: { email: string; conversations: number; inputTokens: number; outputTokens: number }[];
   source: 'anthropic';
+  limitations: {
+    perUser: boolean; // true = Admin API cannot break down usage per user/email
+    note: string;
+  };
   window: { startingAt: string; endingAt: string };
 }
 
@@ -225,69 +195,65 @@ async function buildPayload(adminKey: string, days: number): Promise<UsagePayloa
     fetchAllCost(adminKey, startingAt, endingAt),
   ]);
 
-  const byUser = aggregateByUser(usageBuckets, costBuckets);
+  // Aggregate org-wide totals from daily buckets.
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let costUsd = 0;
+  const activeDaySet = new Set<string>();
 
-  const rows: TeamRow[] = [];
-  const unmatched: UsagePayload['unmatched'] = [];
-
-  for (const agg of byUser.values()) {
-    const member = lookupMember(agg.email);
-    if (member) {
-      rows.push({
-        email: agg.email,
-        name: member.name,
-        department: member.department,
-        companies: member.companies,
-        conversations: agg.conversations,
-        inputTokens: agg.inputTokens,
-        outputTokens: agg.outputTokens,
-        costUsd: agg.costUsd,
-      });
-    } else {
-      unmatched.push({
-        email: agg.email,
-        conversations: agg.conversations,
-        inputTokens: agg.inputTokens,
-        outputTokens: agg.outputTokens,
-      });
+  for (const b of usageBuckets) {
+    let bucketHasActivity = false;
+    for (const r of b.results ?? []) {
+      const inT = (r.input_tokens ?? 0) + (r.cache_creation_input_tokens ?? 0) + (r.cache_read_input_tokens ?? 0);
+      const outT = r.output_tokens ?? 0;
+      inputTokens += inT;
+      outputTokens += outT;
+      if (inT > 0 || outT > 0) bucketHasActivity = true;
+    }
+    if (bucketHasActivity && b.starting_at) {
+      activeDaySet.add(b.starting_at.slice(0, 10));
+    }
+  }
+  for (const b of costBuckets) {
+    for (const r of b.results ?? []) {
+      costUsd += r.amount ?? 0;
     }
   }
 
-  // Also include seats on the roster with zero activity so the UI shows
-  // everyone — makes "no activity" obvious instead of silently omitted.
-  const seen = new Set(rows.map((r) => r.email.toLowerCase()));
-  for (const m of TEAM) {
-    if (!seen.has(m.email.toLowerCase())) {
-      rows.push({
-        email: m.email,
-        name: m.name,
-        department: m.department,
-        companies: m.companies,
-        conversations: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        costUsd: 0,
-      });
-    }
-  }
-
-  const totals = rows.reduce(
-    (acc, r) => {
-      acc.conversations += r.conversations;
-      acc.inputTokens += r.inputTokens;
-      acc.outputTokens += r.outputTokens;
-      acc.costUsd += r.costUsd;
-      if (r.conversations > 0) acc.users += 1;
-      return acc;
-    },
-    { conversations: 0, users: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 },
-  );
+  // Roster seats are returned with zeros — Admin API can't attribute usage
+  // per user. Keeping the shape lets the UI show the mapping we already have.
+  void lookupMember; // silence unused import — kept for future per-key mapping
+  const rows: TeamRow[] = TEAM.map((m) => ({
+    email: m.email,
+    name: m.name,
+    department: m.department,
+    companies: m.companies,
+    conversations: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    costUsd: 0,
+  }));
 
   return {
     rows,
-    totals,
-    unmatched,
+    orgTotals: {
+      inputTokens,
+      outputTokens,
+      costUsd,
+      activeDays: activeDaySet.size,
+    },
+    totals: {
+      conversations: 0,
+      users: 0,
+      inputTokens,
+      outputTokens,
+      costUsd,
+    },
     source: 'anthropic',
+    limitations: {
+      perUser: false,
+      note: 'Anthropic Admin API exposes org-level totals only. Per-user attribution for Claude.ai requires the CSV export from console.anthropic.com → Usage.',
+    },
     window: { startingAt, endingAt },
   };
 }
