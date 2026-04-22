@@ -286,7 +286,7 @@ export function AIToolsPage() {
                 {t.key === 'supabase' ? `${supabaseData?.snapshotTotals.totalRows ?? '—'} rows` : t.connected ? formatCurrency(t.spendUsd) : '—'}
               </span>
               <span style={{ fontSize: '0.85rem', color: t.connected ? '#8aad90' : '#3a5540' }}>
-                {t.key === 'supabase' ? timeAgo(supabaseData?.totals.lastSyncedAt ?? null) : t.connected ? formatHours(t.hoursSaved) : '—'}
+                {t.key === 'supabase' ? timeAgo(supabaseData?.snapshotTotals.lastSyncedAt ?? null) : t.connected ? formatHours(t.hoursSaved) : '—'}
               </span>
             </div>
           ))}
