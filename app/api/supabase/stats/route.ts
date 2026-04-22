@@ -5,6 +5,34 @@ import type { DashboardPeriod } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
+const MGMT_API = 'https://api.supabase.com/v1';
+
+// Known project metadata (public table counts from schema inspection).
+// Auto-discovered future projects will appear with publicTables: null.
+const KNOWN_PROJECTS: Record<string, { publicTables: number }> = {
+  mzlnnxpnfxbjmywsxcfc: { publicTables: 1  },  // AI Projects
+  pwylvzpihgeauifcygbd: { publicTables: 10 },  // Willowpack
+  mkgblixphikyooqkqdqe: { publicTables: 2  },  // SinaLite
+};
+
+interface MgmtProject {
+  id: string;
+  name: string;
+  status: string;
+  region: string;
+  created_at: string;
+  database?: { version?: string; postgres_engine?: string };
+}
+
+async function listProjects(pat: string): Promise<MgmtProject[]> {
+  const resp = await fetch(`${MGMT_API}/projects`, {
+    headers: { Authorization: `Bearer ${pat}`, Accept: 'application/json' },
+    cache: 'no-store',
+  });
+  if (!resp.ok) throw new Error(`Supabase Management API ${resp.status}`);
+  return (await resp.json()) as MgmtProject[];
+}
+
 function lookbackDays(period: DashboardPeriod): number {
   switch (period) {
     case 'weekly':    return 7;
@@ -15,9 +43,9 @@ function lookbackDays(period: DashboardPeriod): number {
 }
 
 const SOURCE_LABELS: Record<string, string> = {
-  'intercom-fin':     'Intercom FIN',
-  'elevenlabs-calls': 'ElevenLabs',
-  'n8n-history':      'n8n',
+  'intercom-fin':       'Intercom FIN',
+  'elevenlabs-calls':   'ElevenLabs',
+  'n8n-history':        'n8n',
   'claude-leaderboard': 'Claude',
 };
 
@@ -25,75 +53,105 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const period = (searchParams.get('period') ?? 'weekly') as DashboardPeriod;
 
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    return NextResponse.json({ error: 'Supabase not configured' }, { status: 501 });
+  const pat = process.env.SUPABASE_ACCESS_TOKEN;
+
+  // ── Projects list (Management API) ────────────────────────────────────────
+  let projects: Array<{
+    id: string; name: string; status: string; region: string;
+    createdAt: string; pgVersion: string; publicTables: number | null;
+  }> = [];
+
+  if (pat) {
+    try {
+      const raw = await listProjects(pat);
+      projects = raw.map((p) => ({
+        id: p.id,
+        name: p.name,
+        status: p.status,
+        region: p.region,
+        createdAt: p.created_at,
+        pgVersion: p.database?.postgres_engine ?? '—',
+        publicTables: KNOWN_PROJECTS[p.id]?.publicTables ?? null,
+      })).sort((a, b) => a.name.localeCompare(b.name));
+    } catch (e) {
+      console.error('[supabase/stats] Management API error:', e);
+      // Fall through to hardcoded fallback below
+    }
   }
 
-  try {
-    const days = lookbackDays(period);
-    const fromDate = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
-    const toDate = new Date().toISOString().slice(0, 10);
-
-    // Fetch all snapshot rows in the period (excluding debug/test rows)
-    const { data: rows, error } = await getSupabase()
-      .from('dashboard_daily_snapshots')
-      .select('date, source, synced_at')
-      .gte('date', fromDate)
-      .lte('date', toDate)
-      .not('source', 'in', '("debug-test","test")')
-      .order('date', { ascending: true });
-
-    if (error) throw new Error(error.message);
-
-    const allRows = rows ?? [];
-
-    // Group by date → count of syncs
-    const byDate = new Map<string, number>();
-    const bySource = new Map<string, number>();
-    let lastSyncedAt: string | null = null;
-
-    for (const row of allRows) {
-      byDate.set(row.date, (byDate.get(row.date) ?? 0) + 1);
-      bySource.set(row.source, (bySource.get(row.source) ?? 0) + 1);
-      if (!lastSyncedAt || row.synced_at > lastSyncedAt) lastSyncedAt = row.synced_at;
-    }
-
-    // Build chart buckets: one point per day in range
-    const buckets: { date: string; syncs: number }[] = [];
-    const cur = new Date(fromDate + 'T00:00:00Z');
-    const end = new Date(toDate + 'T00:00:00Z');
-    while (cur <= end) {
-      const d = cur.toISOString().slice(0, 10);
-      buckets.push({ date: d, syncs: byDate.get(d) ?? 0 });
-      cur.setUTCDate(cur.getUTCDate() + 1);
-    }
-
-    // Source breakdown
-    const sources = Array.from(bySource.entries()).map(([source, rows]) => ({
-      source,
-      label: SOURCE_LABELS[source] ?? source,
-      rows,
-    })).sort((a, b) => b.rows - a.rows);
-
-    const totalRows = allRows.length;
-    const activeSources = bySource.size;
-    const avgSyncsPerDay = totalRows / Math.max(days, 1);
-
-    return NextResponse.json({
-      buckets,
-      sources,
-      totals: {
-        totalRows,
-        activeSources,
-        avgSyncsPerDay: Number(avgSyncsPerDay.toFixed(1)),
-        lastSyncedAt,
-        daysWithData: byDate.size,
-        totalDays: days,
-      },
-      period,
-    }, { headers: { 'Cache-Control': 'no-store' } });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+  // Fallback: use hardcoded list if PAT not set or API failed
+  if (projects.length === 0) {
+    projects = [
+      { id: 'mzlnnxpnfxbjmywsxcfc', name: 'AI Projects',  status: 'ACTIVE_HEALTHY', region: 'us-east-2', createdAt: '2026-04-22T18:49:51Z', pgVersion: '17', publicTables: 1  },
+      { id: 'pwylvzpihgeauifcygbd', name: 'Willowpack',   status: 'ACTIVE_HEALTHY', region: 'us-west-2', createdAt: '2026-03-12T19:53:58Z', pgVersion: '17', publicTables: 10 },
+      { id: 'mkgblixphikyooqkqdqe', name: 'SinaLite',     status: 'ACTIVE_HEALTHY', region: 'us-east-1', createdAt: '2026-03-16T17:58:09Z', pgVersion: '17', publicTables: 2  },
+    ];
   }
+
+  // ── AI Projects snapshot stats ────────────────────────────────────────────
+  const days = lookbackDays(period);
+  const fromDate = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+  const toDate = new Date().toISOString().slice(0, 10);
+
+  let buckets: { date: string; syncs: number }[] = [];
+  let sources: { source: string; label: string; rows: number }[] = [];
+  let snapshotTotals = { totalRows: 0, activeSources: 0, avgSyncsPerDay: 0, lastSyncedAt: null as string | null, daysWithData: 0, totalDays: days };
+
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    try {
+      const { data: rows, error } = await getSupabase()
+        .from('dashboard_daily_snapshots')
+        .select('date, source, synced_at')
+        .gte('date', fromDate)
+        .lte('date', toDate)
+        .not('source', 'in', '("debug-test","test")')
+        .order('date', { ascending: true });
+
+      if (!error && rows) {
+        const byDate = new Map<string, number>();
+        const bySource = new Map<string, number>();
+        let lastSyncedAt: string | null = null;
+
+        for (const row of rows) {
+          byDate.set(row.date, (byDate.get(row.date) ?? 0) + 1);
+          bySource.set(row.source, (bySource.get(row.source) ?? 0) + 1);
+          if (!lastSyncedAt || row.synced_at > lastSyncedAt) lastSyncedAt = row.synced_at;
+        }
+
+        const cur = new Date(fromDate + 'T00:00:00Z');
+        const end = new Date(toDate + 'T00:00:00Z');
+        while (cur <= end) {
+          const d = cur.toISOString().slice(0, 10);
+          buckets.push({ date: d, syncs: byDate.get(d) ?? 0 });
+          cur.setUTCDate(cur.getUTCDate() + 1);
+        }
+
+        sources = Array.from(bySource.entries()).map(([source, rowCount]) => ({
+          source,
+          label: SOURCE_LABELS[source] ?? source,
+          rows: rowCount,
+        })).sort((a, b) => b.rows - a.rows);
+
+        snapshotTotals = {
+          totalRows: rows.length,
+          activeSources: bySource.size,
+          avgSyncsPerDay: Number((rows.length / Math.max(days, 1)).toFixed(1)),
+          lastSyncedAt,
+          daysWithData: byDate.size,
+          totalDays: days,
+        };
+      }
+    } catch (e) {
+      console.error('[supabase/stats] snapshot query error:', e);
+    }
+  }
+
+  return NextResponse.json({
+    projects,
+    buckets,
+    sources,
+    snapshotTotals,
+    period,
+    managedByPat: !!pat,
+  }, { headers: { 'Cache-Control': 'no-store' } });
 }

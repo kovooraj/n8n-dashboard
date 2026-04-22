@@ -46,10 +46,21 @@ interface ClaudePayload {
   source: 'claude-ai-internal';
 }
 
+interface SupabaseProject {
+  id: string;
+  name: string;
+  status: string;
+  region: string;
+  createdAt: string;
+  pgVersion: string;
+  publicTables: number | null;
+}
+
 interface SupabaseStats {
+  projects: SupabaseProject[];
   buckets: { date: string; syncs: number }[];
   sources: { source: string; label: string; rows: number }[];
-  totals: {
+  snapshotTotals: {
     totalRows: number;
     activeSources: number;
     avgSyncsPerDay: number;
@@ -57,6 +68,7 @@ interface SupabaseStats {
     daysWithData: number;
     totalDays: number;
   };
+  managedByPat: boolean;
 }
 
 const HOURS_PER_DOLLAR = 1.5;
@@ -201,7 +213,7 @@ export function AIToolsPage() {
   // ── All-tools aggregations ──────────────────────────────────────────────────
   const allToolsData = useMemo(() => [
     { key: 'claude' as ToolFilter,     label: 'Claude',     color: '#d4912a', connected: claudeConnected, spendUsd: claudeSpend, activeUsers: claudeActive, hoursSaved: claudeHours, error: claudeError, loading: claudeLoading },
-    { key: 'supabase' as ToolFilter,   label: 'Supabase',   color: '#3ecf8e', connected: true,            spendUsd: 0,           activeUsers: supabaseData?.totals.activeSources ?? 0, hoursSaved: 0, error: null, loading: supabaseLoading },
+    { key: 'supabase' as ToolFilter,   label: 'Supabase',   color: '#3ecf8e', connected: true,            spendUsd: 0,           activeUsers: supabaseData?.snapshotTotals.activeSources ?? 0, hoursSaved: 0, error: null, loading: supabaseLoading },
     { key: 'chatgpt' as ToolFilter,    label: 'ChatGPT',    color: '#10a37f', connected: false,           spendUsd: 0,           activeUsers: 0, hoursSaved: 0, error: null, loading: false },
     { key: 'gemini' as ToolFilter,     label: 'Gemini',     color: '#4285f4', connected: false,           spendUsd: 0,           activeUsers: 0, hoursSaved: 0, error: null, loading: false },
     { key: 'perplexity' as ToolFilter, label: 'Perplexity', color: '#9b6dff', connected: false,           spendUsd: 0,           activeUsers: 0, hoursSaved: 0, error: null, loading: false },
@@ -271,7 +283,7 @@ export function AIToolsPage() {
                 {t.connected ? (t.key === 'supabase' ? `${t.activeUsers} sources` : t.activeUsers) : '—'}
               </span>
               <span style={{ fontSize: '0.9rem', fontWeight: 600, color: t.connected ? '#e4ede6' : '#3a5540' }}>
-                {t.key === 'supabase' ? `${supabaseData?.totals.totalRows ?? '—'} rows` : t.connected ? formatCurrency(t.spendUsd) : '—'}
+                {t.key === 'supabase' ? `${supabaseData?.snapshotTotals.totalRows ?? '—'} rows` : t.connected ? formatCurrency(t.spendUsd) : '—'}
               </span>
               <span style={{ fontSize: '0.85rem', color: t.connected ? '#8aad90' : '#3a5540' }}>
                 {t.key === 'supabase' ? timeAgo(supabaseData?.totals.lastSyncedAt ?? null) : t.connected ? formatHours(t.hoursSaved) : '—'}
@@ -345,13 +357,19 @@ export function AIToolsPage() {
   }
 
   function SupabaseView() {
-    const totals = supabaseData?.totals;
+    const totals = supabaseData?.snapshotTotals;
     const sources = supabaseData?.sources ?? [];
+    const projects = supabaseData?.projects ?? [];
+    const managedByPat = supabaseData?.managedByPat ?? false;
     const maxRows = Math.max(1, ...sources.map((s) => s.rows));
+
+    const regionLabel = (r: string) => r.replace('us-', 'US ').replace('eu-', 'EU ').replace('-', ' ').toUpperCase();
+    const statusColor = (s: string) => s === 'ACTIVE_HEALTHY' ? '#3dba62' : s.includes('PAUSE') ? '#6a8870' : '#e05858';
+    const statusLabel = (s: string) => s === 'ACTIVE_HEALTHY' ? 'Healthy' : s.replace(/_/g, ' ').toLowerCase();
 
     return (
       <>
-        {/* Connection banner */}
+        {/* Banner */}
         <div style={{
           background: 'rgba(62,207,142,0.08)', border: '1px solid rgba(62,207,142,0.3)',
           borderRadius: 8, padding: '12px 16px', marginBottom: 20,
@@ -360,13 +378,16 @@ export function AIToolsPage() {
           <Database size={18} color="#3ecf8e" />
           <div style={{ flex: 1 }}>
             <p style={{ fontSize: '0.85rem', fontWeight: 600, color: '#e4ede6', margin: 0 }}>
-              Connected — Supabase AI Projects database
+              Connected — {projects.length} Supabase project{projects.length !== 1 ? 's' : ''} · {managedByPat ? 'live via Management API' : 'cached project list'}
             </p>
             <p style={{ fontSize: '0.72rem', color: '#8aad90', margin: '2px 0 0 0' }}>
-              Storing daily snapshots for all dashboard sources. Last synced {timeAgo(totals?.lastSyncedAt ?? null)} · refreshed daily at 2am UTC.
+              {managedByPat
+                ? 'New projects added to this organisation appear here automatically.'
+                : <>Add <code style={{ color: '#b8d4bd' }}>SUPABASE_ACCESS_TOKEN</code> in Vercel env vars for live project discovery.</>}
+              {' '}Last snapshot synced {timeAgo(totals?.lastSyncedAt ?? null)} · 2am UTC daily cron.
             </p>
           </div>
-          <a href="https://supabase.com/dashboard/project/mzlnnxpnfxbjmywsxcfc" target="_blank" rel="noopener noreferrer" style={{
+          <a href="https://supabase.com/dashboard" target="_blank" rel="noopener noreferrer" style={{
             display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 6,
             background: 'rgba(62,207,142,0.15)', border: '1px solid rgba(62,207,142,0.4)',
             color: '#3ecf8e', fontSize: '0.7rem', fontWeight: 700,
@@ -376,52 +397,77 @@ export function AIToolsPage() {
           </a>
         </div>
 
-        <SectionHeader eyebrow="1. DATABASE ACTIVITY" title="Daily Sync Activity" />
-
-        {/* KPI row */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
-          <BenchKPICard
-            label="Total Rows Stored"
-            value={supabaseLoading ? '—' : (totals?.totalRows ?? 0).toLocaleString()}
-            showInfo
-            tooltip="Total snapshot rows stored in dashboard_daily_snapshots table for this period."
-          />
-          <BenchKPICard
-            label="Active Sources"
-            value={supabaseLoading ? '—' : totals?.activeSources ?? 0}
-            showInfo
-            tooltip="Number of distinct data sources writing to the DB in this period."
-          />
-          <BenchKPICard
-            label="Avg Syncs / Day"
-            value={supabaseLoading ? '—' : totals?.avgSyncsPerDay ?? 0}
-            showInfo
-            tooltip="Average number of rows written per day across all sources."
-          />
-          <BenchKPICard
-            label="Coverage"
-            value={supabaseLoading ? '—' : `${totals?.daysWithData ?? 0}/${totals?.totalDays ?? 0}d`}
-            showInfo
-            tooltip="Days that have at least one synced snapshot vs total days in the period."
-          />
+        {/* Section 1 — All Projects */}
+        <SectionHeader eyebrow="1. PROJECTS" title="All Supabase Projects" />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 28 }}>
+          {(supabaseLoading ? [] : projects).map((p) => {
+            const sc = statusColor(p.status);
+            return (
+              <a
+                key={p.id}
+                href={`https://supabase.com/dashboard/project/${p.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: '16px', textDecoration: 'none', display: 'flex', flexDirection: 'column', gap: 12 }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                  <div>
+                    <p style={{ fontSize: '0.95rem', fontWeight: 700, color: '#e4ede6', margin: '0 0 4px 0' }}>{p.name}</p>
+                    <p style={{ fontSize: '0.7rem', color: '#6a8870', margin: 0 }}>{regionLabel(p.region)} · PG {p.pgVersion}</p>
+                  </div>
+                  <span style={{
+                    padding: '2px 8px', borderRadius: 4, background: `${sc}18`,
+                    border: `1px solid ${sc}`, fontSize: '0.6rem', fontWeight: 700,
+                    letterSpacing: '0.1em', textTransform: 'uppercase', color: sc, flexShrink: 0,
+                  }}>{statusLabel(p.status)}</span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div style={{ background: '#0a1410', borderRadius: 6, padding: '8px 10px' }}>
+                    <p style={{ fontSize: '0.6rem', color: '#6a8870', margin: '0 0 4px 0', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Public Tables</p>
+                    <p style={{ fontSize: '1.1rem', fontWeight: 700, color: '#3ecf8e', margin: 0 }}>
+                      {p.publicTables !== null ? p.publicTables : '—'}
+                    </p>
+                  </div>
+                  <div style={{ background: '#0a1410', borderRadius: 6, padding: '8px 10px' }}>
+                    <p style={{ fontSize: '0.6rem', color: '#6a8870', margin: '0 0 4px 0', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Created</p>
+                    <p style={{ fontSize: '0.8rem', fontWeight: 600, color: '#8aad90', margin: 0 }}>
+                      {new Date(p.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: '2-digit' })}
+                    </p>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: sc, boxShadow: `0 0 5px ${sc}80` }} />
+                  <span style={{ fontSize: '0.65rem', color: '#6a8870' }}>{p.id}</span>
+                  <ExternalLink size={10} color="#3a5540" style={{ marginLeft: 'auto' }} />
+                </div>
+              </a>
+            );
+          })}
+          {supabaseLoading && [0,1,2].map((i) => (
+            <div key={i} style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, height: 140 }} />
+          ))}
         </div>
 
-        {/* Sync volume chart */}
+        {/* Section 2 — Snapshot activity (AI Projects DB) */}
+        <SectionHeader eyebrow="2. DASHBOARD SNAPSHOTS · AI PROJECTS DB" title="Daily Sync Activity" />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+          <BenchKPICard label="Total Rows" value={supabaseLoading ? '—' : (totals?.totalRows ?? 0).toLocaleString()} showInfo tooltip="Snapshot rows in dashboard_daily_snapshots for this period." />
+          <BenchKPICard label="Active Sources" value={supabaseLoading ? '—' : totals?.activeSources ?? 0} showInfo tooltip="Distinct data sources writing snapshots in this period." />
+          <BenchKPICard label="Avg Syncs / Day" value={supabaseLoading ? '—' : totals?.avgSyncsPerDay ?? 0} showInfo tooltip="Average rows written per day across all sources." />
+          <BenchKPICard label="Coverage" value={supabaseLoading ? '—' : `${totals?.daysWithData ?? 0}/${totals?.totalDays ?? 0}d`} showInfo tooltip="Days with at least one snapshot vs total days in period." />
+        </div>
+
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 24 }}>
           <p style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#6a8870', marginBottom: 12 }}>
             DB Writes Per Day
           </p>
-          {supabaseLoading ? (
-            <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <p style={{ fontSize: '0.75rem', color: '#6a8870' }}>Loading…</p>
-            </div>
-          ) : (
-            <VolumeChart data={supabaseChartData} />
-          )}
+          {supabaseLoading
+            ? <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><p style={{ fontSize: '0.75rem', color: '#6a8870' }}>Loading…</p></div>
+            : <VolumeChart data={supabaseChartData} />}
         </div>
 
-        {/* Source breakdown */}
-        <SectionHeader eyebrow="2. SOURCE BREAKDOWN" title="Rows by data source" />
+        {/* Section 3 — Source breakdown */}
+        <SectionHeader eyebrow="3. SOURCE BREAKDOWN" title="Rows by data source" />
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 24 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 2fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
             {['Source', 'Rows', 'Share'].map((h) => (
@@ -457,7 +503,8 @@ export function AIToolsPage() {
         </div>
 
         <p style={{ fontSize: '0.7rem', color: '#6a8870', lineHeight: 1.5 }}>
-          Source: Supabase <code style={{ color: '#8aad90' }}>dashboard_daily_snapshots</code> table · project <code style={{ color: '#8aad90' }}>mzlnnxpnfxbjmywsxcfc</code> · synced daily at 2am UTC via Vercel cron.
+          Projects: Supabase Management API {managedByPat ? '(live)' : '(cached — add SUPABASE_ACCESS_TOKEN to Vercel for live discovery)'}
+          {' · '}Snapshots: <code style={{ color: '#8aad90' }}>dashboard_daily_snapshots</code> · synced 2am UTC daily.
         </p>
       </>
     );
