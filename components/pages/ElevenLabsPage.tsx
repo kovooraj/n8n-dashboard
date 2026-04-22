@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
+import { useStaleData } from '@/lib/useStaleData';
 import dynamic from 'next/dynamic';
 import { RefreshCw } from 'lucide-react';
 import { PeriodTabs } from '@/components/PeriodTabs';
@@ -36,31 +37,28 @@ const STATUS_COLORS: Record<string, string> = {
 
 export function ElevenLabsPage() {
   const [period, setPeriod] = useState<DashboardPeriod>('weekly');
-  const [buckets, setBuckets] = useState<ElevenLabsSnapshot[]>([]);
-  const [totals, setTotals] = useState<ElevenLabsTotals | null>(null);
-  const [projects, setProjects] = useState<ClickUpTask[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [hideCompleted, setHideCompleted] = useState(true);
 
-  const fetchData = useCallback((isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
-    const bust = `_t=${Date.now()}`;
-    const force = isRefresh ? '&refresh=1' : '';
-    Promise.allSettled([
-      fetch(`/api/elevenlabs/calls?period=${period}&${bust}${force}`, { cache: 'no-store' }).then((r) => r.json()),
-      fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
-    ]).then(([elResult, cuResult]) => {
-      if (elResult.status === 'fulfilled') {
-        setBuckets(elResult.value.buckets ?? []);
-        setTotals(elResult.value.totals ?? null);
-      }
-      if (cuResult.status === 'fulfilled') setProjects(cuResult.value.tasks ?? []);
-    }).catch(() => {}).finally(() => { setLoading(false); setRefreshing(false); });
-  }, [period]);
+  const { data, loading, refreshing, stale, refresh } = useStaleData(
+    `elevenlabs-${period}`,
+    async (isRefresh) => {
+      const force = isRefresh ? '&refresh=1' : '';
+      const [elResult, cuResult] = await Promise.allSettled([
+        fetch(`/api/elevenlabs/calls?period=${period}&_t=${Date.now()}${force}`, { cache: 'no-store' }).then((r) => r.json()),
+        fetch(`/api/clickup/projects?_t=${Date.now()}`, { cache: 'no-store' }).then((r) => r.json()),
+      ]);
+      return {
+        buckets: elResult.status === 'fulfilled' ? (elResult.value.buckets ?? []) as ElevenLabsSnapshot[] : [] as ElevenLabsSnapshot[],
+        totals: elResult.status === 'fulfilled' ? (elResult.value.totals ?? null) as ElevenLabsTotals | null : null,
+        projects: cuResult.status === 'fulfilled' ? (cuResult.value.tasks ?? []) as ClickUpTask[] : [] as ClickUpTask[],
+      };
+    },
+    [period],
+  );
 
-  useEffect(() => { fetchData(false); }, [fetchData]);
+  const buckets = data?.buckets ?? [];
+  const totals = data?.totals ?? null;
+  const projects = data?.projects ?? [];
 
   const deflectionRate = totals ? Number((100 - totals.transferRate).toFixed(1)) : 0;
   const transferredCount = totals ? Math.round(totals.calls * (totals.transferRate / 100)) : 0;
@@ -96,7 +94,7 @@ export function ElevenLabsPage() {
       <div style={{ padding: '0 24px', flexShrink: 0, paddingTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <PeriodTabs active={period} onChange={setPeriod} />
         <button
-          onClick={() => fetchData(true)}
+          onClick={() => refresh()}
           disabled={refreshing}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, background: 'transparent',

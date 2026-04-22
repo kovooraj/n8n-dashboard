@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
+import { useStaleData } from '@/lib/useStaleData';
 import dynamic from 'next/dynamic';
 import { RefreshCw } from 'lucide-react';
 import { PeriodTabs } from '@/components/PeriodTabs';
@@ -36,31 +37,28 @@ const STATUS_COLORS: Record<string, string> = {
 
 export function FINPage() {
   const [period, setPeriod] = useState<DashboardPeriod>('weekly');
-  const [buckets, setBuckets] = useState<FINSnapshot[]>([]);
-  const [totals, setTotals] = useState<FINTotals | null>(null);
-  const [projects, setProjects] = useState<ClickUpTask[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [hideCompleted, setHideCompleted] = useState(true);
 
-  const fetchData = useCallback((isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
-    const bust = `_t=${Date.now()}`;
-    const force = isRefresh ? '&refresh=1' : '';
-    Promise.allSettled([
-      fetch(`/api/intercom/fin?period=${period}&${bust}${force}`, { cache: 'no-store' }).then((r) => r.json()),
-      fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
-    ]).then(([finResult, cuResult]) => {
-      if (finResult.status === 'fulfilled') {
-        setBuckets(finResult.value.buckets ?? []);
-        setTotals(finResult.value.totals ?? null);
-      }
-      if (cuResult.status === 'fulfilled') setProjects(cuResult.value.tasks ?? []);
-    }).catch(() => {}).finally(() => { setLoading(false); setRefreshing(false); });
-  }, [period]);
+  const { data, loading, refreshing, stale, refresh } = useStaleData(
+    `fin-${period}`,
+    async (isRefresh) => {
+      const force = isRefresh ? '&refresh=1' : '';
+      const [finResult, cuResult] = await Promise.allSettled([
+        fetch(`/api/intercom/fin?period=${period}&_t=${Date.now()}${force}`, { cache: 'no-store' }).then((r) => r.json()),
+        fetch(`/api/clickup/projects?_t=${Date.now()}`, { cache: 'no-store' }).then((r) => r.json()),
+      ]);
+      return {
+        buckets: finResult.status === 'fulfilled' ? (finResult.value.buckets ?? []) as FINSnapshot[] : [] as FINSnapshot[],
+        totals: finResult.status === 'fulfilled' ? (finResult.value.totals ?? null) as FINTotals | null : null,
+        projects: cuResult.status === 'fulfilled' ? (cuResult.value.tasks ?? []) as ClickUpTask[] : [] as ClickUpTask[],
+      };
+    },
+    [period],
+  );
 
-  useEffect(() => { fetchData(false); }, [fetchData]);
+  const buckets = data?.buckets ?? [];
+  const totals = data?.totals ?? null;
+  const projects = data?.projects ?? [];
 
   const chartData: VolumePoint[] = buildVolumeFromBuckets(
     buckets.map((b) => ({ label: b.label ?? b.weekLabel, metrics: { total: b.finInvolvement, resolved: b.finResolved } })),
@@ -83,7 +81,7 @@ export function FINPage() {
       <div style={{ padding: '0 24px', flexShrink: 0, paddingTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <PeriodTabs active={period} onChange={setPeriod} />
         <button
-          onClick={() => fetchData(true)}
+          onClick={() => refresh()}
           disabled={refreshing}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, background: 'transparent',

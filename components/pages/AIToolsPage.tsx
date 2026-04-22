@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useStaleData } from '@/lib/useStaleData';
 import { Brain, ExternalLink, RefreshCw, Trophy, Plug } from 'lucide-react';
 import { PeriodTabs } from '@/components/PeriodTabs';
 import { BenchKPICard } from '@/components/BenchKPICard';
@@ -111,45 +112,23 @@ export function AIToolsPage() {
   const [company, setCompany] = useState<CompanyFilter>('all');
   const [tool, setTool] = useState<ToolFilter>('all');
 
-  // Claude state
-  const [claudeUsers, setClaudeUsers] = useState<UserRow[]>([]);
-  const [claudeDepts, setClaudeDepts] = useState<DeptRow[]>([]);
-  const [claudeDataAsOf, setClaudeDataAsOf] = useState<string | undefined>();
-  const [claudeLoading, setClaudeLoading] = useState(true);
-  const [claudeError, setClaudeError] = useState<string | null>(null);
-  const [claudeConnected, setClaudeConnected] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const fetchClaude = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    else setClaudeLoading(true);
-    setClaudeError(null);
-    try {
+  const { data: claudeData, loading: claudeLoading, refreshing, stale: claudeStale, refresh: refreshClaude } = useStaleData<ClaudePayload & { error?: string }>(
+    `claude-leaderboard-${period}`,
+    async (isRefresh) => {
       const force = isRefresh ? '&refresh=1' : '';
       const resp = await fetch(`/api/claude/leaderboard?period=${period}&_t=${Date.now()}${force}`, { cache: 'no-store' });
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        setClaudeError(body?.error ?? `HTTP ${resp.status}`);
-        setClaudeUsers([]);
-        setClaudeDepts([]);
-        setClaudeConnected(false);
-        return;
-      }
-      const data: ClaudePayload = await resp.json();
-      setClaudeUsers(data.users ?? []);
-      setClaudeDepts(data.departments ?? []);
-      setClaudeDataAsOf(data.dataAsOf);
-      setClaudeConnected(true);
-    } catch (e) {
-      setClaudeError(e instanceof Error ? e.message : 'Fetch failed');
-      setClaudeConnected(false);
-    } finally {
-      setClaudeLoading(false);
-      setRefreshing(false);
-    }
-  }, [period]);
+      const body = await resp.json();
+      if (!resp.ok) throw new Error(body?.error ?? `HTTP ${resp.status}`);
+      return body as ClaudePayload;
+    },
+    [period],
+  );
 
-  useEffect(() => { fetchClaude(false); }, [fetchClaude]);
+  const claudeUsers = claudeData?.users ?? [];
+  const claudeDepts = claudeData?.departments ?? [];
+  const claudeDataAsOf = claudeData?.dataAsOf;
+  const claudeConnected = !claudeLoading && !!claudeData && !claudeData.error;
+  const claudeError = claudeData?.error ?? null;
 
   // Filtered Claude data
   const filteredUsers = useMemo(
@@ -560,7 +539,7 @@ export function AIToolsPage() {
                 {companyPill('willowpack', 'Willowpack')}
               </div>
               <button
-                onClick={() => fetchClaude(true)}
+                onClick={() => refreshClaude()}
                 disabled={refreshing}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6,
