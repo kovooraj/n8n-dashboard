@@ -79,7 +79,9 @@ export function buildElevenLabsDailySnapshots(convs: ELConversation[]): RawSnaps
       acc.durationSum += c.call_duration_secs;
       acc.durationCount += 1;
     }
-    if (c.call_successful !== 'success') acc.transfers += 1;
+    // 'success' = call was transferred to a human agent (successful handoff).
+    // Any other outcome (null, 'failure', 'unknown') = AI deflected the call.
+    if (c.call_successful === 'success') acc.transfers += 1;
     if (c.agent_id) acc.agentIds.add(c.agent_id);
     byDay.set(day, acc);
   }
