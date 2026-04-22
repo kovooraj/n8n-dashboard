@@ -125,7 +125,7 @@ async function fetchLeaderboardSnapshot(targetDate: string): Promise<RawSnapshot
   const orgId = process.env.CLAUDE_ORG_ID;
   if (!sessionKey || !orgId) throw new Error('CLAUDE_SESSION_KEY or CLAUDE_ORG_ID not set');
 
-  const url = `https://claude.ai/api/organizations/${orgId}/analytics/users/rankings?metric=spend&start_date=${targetDate}&limit=500`;
+  const url = `https://claude.ai/api/organizations/${orgId}/analytics/users/rankings?metric=spend&start_date=${targetDate}&limit=100`;
   const resp = await fetch(url, {
     headers: {
       cookie: `sessionKey=${sessionKey}`,
