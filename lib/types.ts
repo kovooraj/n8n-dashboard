@@ -143,7 +143,7 @@ export interface ElevenLabsTotals {
 }
 
 // ── ClickUp task type ────────────────────────────────────────────────────────
-export type TaskPlatform = 'n8n' | 'fin' | 'elevenlabs' | 'general';
+export type TaskPlatform = 'n8n' | 'fin' | 'elevenlabs' | 'ai-tool' | 'general';
 
 export interface ClickUpTask {
   id: string;

@@ -14,6 +14,13 @@ const TAG_PLATFORM_MAP: Record<string, TaskPlatform> = {
   '11labs': 'elevenlabs',
   'elevenlabs': 'elevenlabs',
   'fin': 'fin',
+  'ai tool': 'ai-tool',
+  'ai tools': 'ai-tool',
+  'ai-tool': 'ai-tool',
+  'claude': 'ai-tool',
+  'chatgpt': 'ai-tool',
+  'gemini': 'ai-tool',
+  'perplexity': 'ai-tool',
 };
 
 function detectPlatformFromTags(tags: string[]): TaskPlatform | null {

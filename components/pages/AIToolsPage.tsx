@@ -2,15 +2,22 @@
 
 import { useMemo, useState } from 'react';
 import { useStaleData } from '@/lib/useStaleData';
-import { Brain, ExternalLink, RefreshCw, Trophy, Plug } from 'lucide-react';
+import { Brain, ExternalLink, RefreshCw, Trophy, Plug, Database } from 'lucide-react';
 import { PeriodTabs } from '@/components/PeriodTabs';
 import { BenchKPICard } from '@/components/BenchKPICard';
-import type { DashboardPeriod } from '@/lib/types';
+import { HideCompletedToggle } from '@/components/HideCompletedToggle';
+import dynamic from 'next/dynamic';
+import type { DashboardPeriod, ClickUpTask } from '@/lib/types';
 import { formatCurrency, formatHours } from '@/lib/chartUtils';
 import { TEAM, type Company } from '@/lib/aiToolsTeam';
 
+const VolumeChart = dynamic(
+  () => import('@/components/charts/VolumeChart').then((m) => m.VolumeChart),
+  { ssr: false, loading: () => <div style={{ height: 180, background: '#0d1810', borderRadius: 8 }} /> },
+);
+
 type CompanyFilter = 'all' | Company;
-type ToolFilter = 'all' | 'claude' | 'chatgpt' | 'gemini' | 'perplexity';
+type ToolFilter = 'all' | 'claude' | 'chatgpt' | 'gemini' | 'perplexity' | 'supabase';
 
 interface UserRow {
   email: string;
@@ -39,8 +46,30 @@ interface ClaudePayload {
   source: 'claude-ai-internal';
 }
 
+interface SupabaseStats {
+  buckets: { date: string; syncs: number }[];
+  sources: { source: string; label: string; rows: number }[];
+  totals: {
+    totalRows: number;
+    activeSources: number;
+    avgSyncsPerDay: number;
+    lastSyncedAt: string | null;
+    daysWithData: number;
+    totalDays: number;
+  };
+}
+
 const HOURS_PER_DOLLAR = 1.5;
 const HOURLY_RATE = 20;
+
+const STATUS_COLORS: Record<string, string> = {
+  complete: '#3dba62',
+  'in progress': '#d4912a',
+  'on hold': '#e05858',
+  'to do': '#6a8870',
+  'planning / scoping': '#4a9eca',
+  cancelled: '#4a4a4a',
+};
 
 // ── Tool definitions ─────────────────────────────────────────────────────────
 
@@ -48,43 +77,16 @@ interface ToolDef {
   key: ToolFilter;
   label: string;
   color: string;
-  logo: string; // emoji fallback until real logos are wired
   connected: boolean;
   connectHint?: string;
 }
 
 const TOOLS: ToolDef[] = [
-  {
-    key: 'claude',
-    label: 'Claude',
-    color: '#d4912a',
-    logo: '🟠',
-    connected: true,
-  },
-  {
-    key: 'chatgpt',
-    label: 'ChatGPT',
-    color: '#10a37f',
-    logo: '🟢',
-    connected: false,
-    connectHint: 'Set OPENAI_ADMIN_KEY in Vercel env vars to see per-user ChatGPT usage.',
-  },
-  {
-    key: 'gemini',
-    label: 'Gemini',
-    color: '#4285f4',
-    logo: '🔵',
-    connected: false,
-    connectHint: 'Google Workspace usage reporting coming soon.',
-  },
-  {
-    key: 'perplexity',
-    label: 'Perplexity',
-    color: '#9b6dff',
-    logo: '🟣',
-    connected: false,
-    connectHint: 'Perplexity Enterprise admin API coming soon.',
-  },
+  { key: 'claude',     label: 'Claude',     color: '#d4912a', connected: true },
+  { key: 'supabase',   label: 'Supabase',   color: '#3ecf8e', connected: true },
+  { key: 'chatgpt',    label: 'ChatGPT',    color: '#10a37f', connected: false, connectHint: 'Set OPENAI_ADMIN_KEY in Vercel env vars to see per-user ChatGPT usage.' },
+  { key: 'gemini',     label: 'Gemini',     color: '#4285f4', connected: false, connectHint: 'Google Workspace usage reporting coming soon.' },
+  { key: 'perplexity', label: 'Perplexity', color: '#9b6dff', connected: false, connectHint: 'Perplexity Enterprise admin API coming soon.' },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -105,14 +107,25 @@ function SectionHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
   );
 }
 
+function timeAgo(iso: string | null): string {
+  if (!iso) return 'Never';
+  const diff = Date.now() - new Date(iso).getTime();
+  const h = Math.floor(diff / 3600000);
+  if (h < 1) return 'Just now';
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 // ── Main component ───────────────────────────────────────────────────────────
 
 export function AIToolsPage() {
   const [period, setPeriod] = useState<DashboardPeriod>('weekly');
   const [company, setCompany] = useState<CompanyFilter>('all');
   const [tool, setTool] = useState<ToolFilter>('all');
+  const [hideCompleted, setHideCompleted] = useState(true);
 
-  const { data: claudeData, loading: claudeLoading, refreshing, stale: claudeStale, refresh: refreshClaude } = useStaleData<ClaudePayload & { error?: string }>(
+  // ── Claude data ─────────────────────────────────────────────────────────────
+  const { data: claudeData, loading: claudeLoading, refreshing, refresh: refreshClaude } = useStaleData<ClaudePayload & { error?: string }>(
     `claude-leaderboard-${period}`,
     async (isRefresh) => {
       const force = isRefresh ? '&refresh=1' : '';
@@ -124,13 +137,40 @@ export function AIToolsPage() {
     [period],
   );
 
+  // ── Supabase data ───────────────────────────────────────────────────────────
+  const { data: supabaseData, loading: supabaseLoading, refresh: refreshSupabase } = useStaleData<SupabaseStats>(
+    `supabase-stats-${period}`,
+    async (isRefresh) => {
+      const force = isRefresh ? '&refresh=1' : '';
+      const resp = await fetch(`/api/supabase/stats?period=${period}&_t=${Date.now()}${force}`, { cache: 'no-store' });
+      return resp.json() as Promise<SupabaseStats>;
+    },
+    [period],
+  );
+
+  // ── ClickUp AI tool tasks ────────────────────────────────────────────────────
+  const { data: clickupData, loading: clickupLoading } = useStaleData<{ tasks: ClickUpTask[] }>(
+    'clickup-projects',
+    async () => {
+      const resp = await fetch(`/api/clickup/projects?_t=${Date.now()}`, { cache: 'no-store' });
+      return resp.json() as Promise<{ tasks: ClickUpTask[] }>;
+    },
+    [],
+  );
+
+  const allAiToolProjects = (clickupData?.tasks ?? []).filter((t) => t.platform === 'ai-tool');
+  const completedAiToolCount = allAiToolProjects.filter((t) => t.status === 'complete').length;
+  const aiToolProjects = hideCompleted
+    ? allAiToolProjects.filter((t) => t.status !== 'complete')
+    : allAiToolProjects;
+
+  // ── Claude derived ───────────────────────────────────────────────────────────
   const claudeUsers = claudeData?.users ?? [];
   const claudeDepts = claudeData?.departments ?? [];
   const claudeDataAsOf = claudeData?.dataAsOf;
   const claudeConnected = !claudeLoading && !!claudeData && !claudeData.error;
   const claudeError = claudeData?.error ?? null;
 
-  // Filtered Claude data
   const filteredUsers = useMemo(
     () => (company === 'all' ? claudeUsers : claudeUsers.filter((u) => u.companies.includes(company))),
     [claudeUsers, company],
@@ -147,70 +187,45 @@ export function AIToolsPage() {
   const maxUserSpend = Math.max(1, ...filteredUsers.map((u) => u.spendUsd));
   const unmappedUsers = filteredUsers.filter((u) => !u.inRoster && u.spendUsd > 0);
 
-  // ALL view aggregations (extend here as more tools connect)
+  // ── Supabase chart data ─────────────────────────────────────────────────────
+  const supabaseChartData = useMemo(() => {
+    const buckets = supabaseData?.buckets ?? [];
+    const maxSyncs = Math.max(1, ...buckets.map((b) => b.syncs));
+    return buckets.map((b) => ({
+      label: b.date.slice(5),   // MM-DD
+      total: maxSyncs,
+      resolved: b.syncs,
+    }));
+  }, [supabaseData]);
+
+  // ── All-tools aggregations ──────────────────────────────────────────────────
   const allToolsData = useMemo(() => [
-    {
-      key: 'claude' as ToolFilter,
-      label: 'Claude',
-      color: '#d4912a',
-      connected: claudeConnected,
-      spendUsd: claudeSpend,
-      activeUsers: claudeActive,
-      hoursSaved: claudeHours,
-      error: claudeError,
-      loading: claudeLoading,
-    },
-    { key: 'chatgpt' as ToolFilter, label: 'ChatGPT', color: '#10a37f', connected: false, spendUsd: 0, activeUsers: 0, hoursSaved: 0, error: null, loading: false },
-    { key: 'gemini' as ToolFilter, label: 'Gemini', color: '#4285f4', connected: false, spendUsd: 0, activeUsers: 0, hoursSaved: 0, error: null, loading: false },
-    { key: 'perplexity' as ToolFilter, label: 'Perplexity', color: '#9b6dff', connected: false, spendUsd: 0, activeUsers: 0, hoursSaved: 0, error: null, loading: false },
-  ], [claudeConnected, claudeSpend, claudeActive, claudeHours, claudeError, claudeLoading]);
+    { key: 'claude' as ToolFilter,     label: 'Claude',     color: '#d4912a', connected: claudeConnected, spendUsd: claudeSpend, activeUsers: claudeActive, hoursSaved: claudeHours, error: claudeError, loading: claudeLoading },
+    { key: 'supabase' as ToolFilter,   label: 'Supabase',   color: '#3ecf8e', connected: true,            spendUsd: 0,           activeUsers: supabaseData?.totals.activeSources ?? 0, hoursSaved: 0, error: null, loading: supabaseLoading },
+    { key: 'chatgpt' as ToolFilter,    label: 'ChatGPT',    color: '#10a37f', connected: false,           spendUsd: 0,           activeUsers: 0, hoursSaved: 0, error: null, loading: false },
+    { key: 'gemini' as ToolFilter,     label: 'Gemini',     color: '#4285f4', connected: false,           spendUsd: 0,           activeUsers: 0, hoursSaved: 0, error: null, loading: false },
+    { key: 'perplexity' as ToolFilter, label: 'Perplexity', color: '#9b6dff', connected: false,           spendUsd: 0,           activeUsers: 0, hoursSaved: 0, error: null, loading: false },
+  ], [claudeConnected, claudeSpend, claudeActive, claudeHours, claudeError, claudeLoading, supabaseData, supabaseLoading]);
 
   const totalSpend = allToolsData.reduce((s, t) => s + t.spendUsd, 0);
   const totalHours = totalSpend * HOURS_PER_DOLLAR;
 
-  // ── Pill helpers ────────────────────────────────────────────────────────────
-
-  function toolPill(key: ToolFilter, label: string) {
-    const active = tool === key;
-    return (
-      <button
-        key={key}
-        onClick={() => setTool(key)}
-        style={{
-          padding: '5px 14px', borderRadius: 6, cursor: 'pointer',
-          background: active ? '#3dba62' : 'transparent',
-          color: active ? '#050d07' : '#8aad90',
-          border: `1px solid ${active ? '#3dba62' : '#1a2c1d'}`,
-          fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-        }}
-      >
-        {label}
-      </button>
-    );
-  }
+  // ── Pill helpers ─────────────────────────────────────────────────────────────
 
   function companyPill(key: CompanyFilter, label: string) {
     const active = company === key;
     return (
-      <button
-        key={key}
-        onClick={() => setCompany(key)}
-        style={{
-          padding: '5px 12px', borderRadius: 6, cursor: 'pointer',
-          background: active ? '#1a2c1d' : 'transparent',
-          color: active ? '#e4ede6' : '#8aad90',
-          border: `1px solid ${active ? '#2a4030' : '#1a2c1d'}`,
-          fontSize: '0.68rem', fontWeight: 600, letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-        }}
-      >
-        {label}
-      </button>
+      <button key={key} onClick={() => setCompany(key)} style={{
+        padding: '5px 12px', borderRadius: 6, cursor: 'pointer',
+        background: active ? '#1a2c1d' : 'transparent',
+        color: active ? '#e4ede6' : '#8aad90',
+        border: `1px solid ${active ? '#2a4030' : '#1a2c1d'}`,
+        fontSize: '0.68rem', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase',
+      }}>{label}</button>
     );
   }
 
-  // ── Views ───────────────────────────────────────────────────────────────────
+  // ── Views ────────────────────────────────────────────────────────────────────
 
   function AllToolsView() {
     return (
@@ -223,78 +238,227 @@ export function AIToolsPage() {
         </div>
 
         <SectionHeader eyebrow="TOOL BREAKDOWN" title="Spend by AI tool" />
-
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 28 }}>
-          {/* Header */}
           <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr 1fr 1fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
-            {['Tool', 'Status', 'Active Users', 'Spend', 'Est. Hours Saved'].map((h) => (
+            {['Tool', 'Status', 'Active / Metric', 'Spend', 'Est. Hours Saved'].map((h) => (
               <span key={h} style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
             ))}
           </div>
           {allToolsData.map((t, i) => (
-            <div
-              key={t.key}
-              onClick={() => setTool(t.key)}
-              style={{
-                display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr 1fr 1fr',
-                padding: '14px 16px', alignItems: 'center',
-                borderBottom: i < allToolsData.length - 1 ? '1px solid #1a2c1d' : 'none',
-                cursor: 'pointer', transition: 'background 0.15s',
-                opacity: t.connected || t.loading ? 1 : 0.55,
-              }}
+            <div key={t.key} onClick={() => setTool(t.key)} style={{
+              display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr 1fr 1fr',
+              padding: '14px 16px', alignItems: 'center',
+              borderBottom: i < allToolsData.length - 1 ? '1px solid #1a2c1d' : 'none',
+              cursor: 'pointer', opacity: t.connected || t.loading ? 1 : 0.55,
+            }}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#111d13')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{
-                  width: 8, height: 8, borderRadius: '50%',
-                  background: t.connected ? t.color : '#2a3d2d',
-                  boxShadow: t.connected ? `0 0 6px ${t.color}80` : 'none',
-                }} />
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: t.connected ? t.color : '#2a3d2d', boxShadow: t.connected ? `0 0 6px ${t.color}80` : 'none' }} />
                 <span style={{ fontSize: '0.9rem', fontWeight: 600, color: t.connected ? '#e4ede6' : '#6a8870' }}>{t.label}</span>
               </div>
               <span style={{
                 display: 'inline-flex', alignItems: 'center', gap: 4,
                 fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
-                color: t.connected ? '#3dba62' : '#6a8870',
-                padding: '2px 8px', borderRadius: 4,
+                color: t.connected ? '#3dba62' : '#6a8870', padding: '2px 8px', borderRadius: 4,
                 background: t.connected ? 'rgba(61,186,98,0.1)' : 'rgba(106,136,112,0.1)',
-                border: `1px solid ${t.connected ? 'rgba(61,186,98,0.3)' : '#1a2c1d'}`,
-                justifySelf: 'start',
+                border: `1px solid ${t.connected ? 'rgba(61,186,98,0.3)' : '#1a2c1d'}`, justifySelf: 'start',
               }}>
                 {t.loading ? 'Loading' : t.connected ? 'Connected' : 'Not connected'}
               </span>
               <span style={{ fontSize: '0.85rem', color: t.connected ? '#8aad90' : '#3a5540' }}>
-                {t.connected ? t.activeUsers : '—'}
+                {t.connected ? (t.key === 'supabase' ? `${t.activeUsers} sources` : t.activeUsers) : '—'}
               </span>
               <span style={{ fontSize: '0.9rem', fontWeight: 600, color: t.connected ? '#e4ede6' : '#3a5540' }}>
-                {t.connected ? formatCurrency(t.spendUsd) : '—'}
+                {t.key === 'supabase' ? `${supabaseData?.totals.totalRows ?? '—'} rows` : t.connected ? formatCurrency(t.spendUsd) : '—'}
               </span>
               <span style={{ fontSize: '0.85rem', color: t.connected ? '#8aad90' : '#3a5540' }}>
-                {t.connected ? formatHours(t.hoursSaved) : '—'}
+                {t.key === 'supabase' ? timeAgo(supabaseData?.totals.lastSyncedAt ?? null) : t.connected ? formatHours(t.hoursSaved) : '—'}
               </span>
             </div>
           ))}
         </div>
 
-        {/* Connect prompts for unconnected tools */}
+        {/* AI Tool Related Projects */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+          <SectionHeader eyebrow="AI TOOL PROJECTS" title="AI Tool Related Projects" />
+          <HideCompletedToggle checked={hideCompleted} onChange={setHideCompleted} count={completedAiToolCount} />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 28 }}>
+          {(clickupLoading ? [] : aiToolProjects).map((project) => {
+            const statusColor = STATUS_COLORS[project.status] ?? '#6a8870';
+            return (
+              <a key={project.id} href={project.url} target="_blank" rel="noopener noreferrer" style={{
+                background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8,
+                padding: '12px 14px', display: 'flex', justifyContent: 'space-between',
+                alignItems: 'center', gap: 12, textDecoration: 'none', cursor: 'pointer',
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontSize: '0.875rem', fontWeight: 600, color: '#e4ede6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</p>
+                  {project.assignees.length > 0 && (
+                    <p style={{ fontSize: '0.75rem', color: '#6a8870', marginTop: 3 }}>{project.assignees.join(', ')}</p>
+                  )}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+                  <span style={{
+                    padding: '2px 8px', borderRadius: 4, background: `${statusColor}18`,
+                    border: `1px solid ${statusColor}`, fontSize: '0.6rem', fontWeight: 700,
+                    letterSpacing: '0.1em', textTransform: 'uppercase', color: statusColor,
+                  }}>{project.status}</span>
+                  <span style={{ fontSize: '0.6rem', color: '#6a8870' }}>
+                    Updated {new Date(project.updatedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}
+                  </span>
+                </div>
+              </a>
+            );
+          })}
+          {clickupLoading && (
+            <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 20, textAlign: 'center' }}>
+              <p style={{ fontSize: '0.75rem', color: '#6a8870' }}>Loading projects…</p>
+            </div>
+          )}
+          {!clickupLoading && aiToolProjects.length === 0 && (
+            <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 20, textAlign: 'center' }}>
+              <p style={{ fontSize: '0.75rem', color: '#6a8870' }}>
+                No tasks tagged &quot;ai tool&quot; found in ClickUp. Tag tasks with <strong>ai tool</strong> to show them here.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Connect prompts */}
         <SectionHeader eyebrow="ADD MORE TOOLS" title="Connect additional AI tools" />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
           {TOOLS.filter((t) => !t.connected).map((t) => (
-            <div key={t.key} style={{
-              background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8,
-              padding: '16px', display: 'flex', flexDirection: 'column', gap: 10,
-            }}>
+            <div key={t.key} style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: '16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <Plug size={16} color="#3a5540" />
                 <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#6a8870' }}>{t.label}</span>
               </div>
-              <p style={{ fontSize: '0.75rem', color: '#4a6450', margin: 0, lineHeight: 1.5 }}>
-                {t.connectHint}
-              </p>
+              <p style={{ fontSize: '0.75rem', color: '#4a6450', margin: 0, lineHeight: 1.5 }}>{t.connectHint}</p>
             </div>
           ))}
         </div>
+      </>
+    );
+  }
+
+  function SupabaseView() {
+    const totals = supabaseData?.totals;
+    const sources = supabaseData?.sources ?? [];
+    const maxRows = Math.max(1, ...sources.map((s) => s.rows));
+
+    return (
+      <>
+        {/* Connection banner */}
+        <div style={{
+          background: 'rgba(62,207,142,0.08)', border: '1px solid rgba(62,207,142,0.3)',
+          borderRadius: 8, padding: '12px 16px', marginBottom: 20,
+          display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <Database size={18} color="#3ecf8e" />
+          <div style={{ flex: 1 }}>
+            <p style={{ fontSize: '0.85rem', fontWeight: 600, color: '#e4ede6', margin: 0 }}>
+              Connected — Supabase AI Projects database
+            </p>
+            <p style={{ fontSize: '0.72rem', color: '#8aad90', margin: '2px 0 0 0' }}>
+              Storing daily snapshots for all dashboard sources. Last synced {timeAgo(totals?.lastSyncedAt ?? null)} · refreshed daily at 2am UTC.
+            </p>
+          </div>
+          <a href="https://supabase.com/dashboard/project/mzlnnxpnfxbjmywsxcfc" target="_blank" rel="noopener noreferrer" style={{
+            display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 6,
+            background: 'rgba(62,207,142,0.15)', border: '1px solid rgba(62,207,142,0.4)',
+            color: '#3ecf8e', fontSize: '0.7rem', fontWeight: 700,
+            letterSpacing: '0.06em', textTransform: 'uppercase', textDecoration: 'none', flexShrink: 0,
+          }}>
+            Open Supabase <ExternalLink size={11} />
+          </a>
+        </div>
+
+        <SectionHeader eyebrow="1. DATABASE ACTIVITY" title="Daily Sync Activity" />
+
+        {/* KPI row */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+          <BenchKPICard
+            label="Total Rows Stored"
+            value={supabaseLoading ? '—' : (totals?.totalRows ?? 0).toLocaleString()}
+            showInfo
+            tooltip="Total snapshot rows stored in dashboard_daily_snapshots table for this period."
+          />
+          <BenchKPICard
+            label="Active Sources"
+            value={supabaseLoading ? '—' : totals?.activeSources ?? 0}
+            showInfo
+            tooltip="Number of distinct data sources writing to the DB in this period."
+          />
+          <BenchKPICard
+            label="Avg Syncs / Day"
+            value={supabaseLoading ? '—' : totals?.avgSyncsPerDay ?? 0}
+            showInfo
+            tooltip="Average number of rows written per day across all sources."
+          />
+          <BenchKPICard
+            label="Coverage"
+            value={supabaseLoading ? '—' : `${totals?.daysWithData ?? 0}/${totals?.totalDays ?? 0}d`}
+            showInfo
+            tooltip="Days that have at least one synced snapshot vs total days in the period."
+          />
+        </div>
+
+        {/* Sync volume chart */}
+        <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 24 }}>
+          <p style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#6a8870', marginBottom: 12 }}>
+            DB Writes Per Day
+          </p>
+          {supabaseLoading ? (
+            <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <p style={{ fontSize: '0.75rem', color: '#6a8870' }}>Loading…</p>
+            </div>
+          ) : (
+            <VolumeChart data={supabaseChartData} />
+          )}
+        </div>
+
+        {/* Source breakdown */}
+        <SectionHeader eyebrow="2. SOURCE BREAKDOWN" title="Rows by data source" />
+        <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 2fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
+            {['Source', 'Rows', 'Share'].map((h) => (
+              <span key={h} style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
+            ))}
+          </div>
+          {sources.length === 0 ? (
+            <div style={{ padding: 20, textAlign: 'center' }}>
+              <p style={{ fontSize: '0.8rem', color: '#6a8870' }}>{supabaseLoading ? 'Loading…' : 'No data yet.'}</p>
+            </div>
+          ) : sources.map((s, i) => {
+            const pct = (s.rows / maxRows) * 100;
+            return (
+              <div key={s.source} style={{
+                display: 'grid', gridTemplateColumns: '1.5fr 1fr 2fr',
+                padding: '12px 16px', alignItems: 'center',
+                borderBottom: i < sources.length - 1 ? '1px solid #1a2c1d' : 'none',
+              }}>
+                <div>
+                  <p style={{ fontSize: '0.85rem', fontWeight: 600, color: '#e4ede6', margin: 0 }}>{s.label}</p>
+                  <p style={{ fontSize: '0.7rem', color: '#6a8870', margin: '2px 0 0 0' }}>{s.source}</p>
+                </div>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#3ecf8e' }}>{s.rows.toLocaleString()}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ flex: 1, height: 6, background: '#112014', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: '#3ecf8e' }} />
+                  </div>
+                  <span style={{ fontSize: '0.7rem', color: '#6a8870', width: 36, textAlign: 'right' }}>{Math.round(pct)}%</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <p style={{ fontSize: '0.7rem', color: '#6a8870', lineHeight: 1.5 }}>
+          Source: Supabase <code style={{ color: '#8aad90' }}>dashboard_daily_snapshots</code> table · project <code style={{ color: '#8aad90' }}>mzlnnxpnfxbjmywsxcfc</code> · synced daily at 2am UTC via Vercel cron.
+        </p>
       </>
     );
   }
@@ -306,7 +470,6 @@ export function AIToolsPage() {
 
     return (
       <>
-        {/* Connection banner */}
         <div style={{
           background: bannerBg, border: `1px solid ${bannerBorder}`,
           borderRadius: 8, padding: '12px 16px', marginBottom: 20,
@@ -321,61 +484,34 @@ export function AIToolsPage() {
             </p>
             <p style={{ fontSize: '0.72rem', color: '#8aad90', margin: '2px 0 0 0' }}>
               {claudeConnected
-                ? <>Refresh <code style={{ color: '#b8d4bd' }}>CLAUDE_SESSION_KEY</code> in Vercel env vars every ~30 days (or whenever this banner turns amber).</>
+                ? <>Refresh <code style={{ color: '#b8d4bd' }}>CLAUDE_SESSION_KEY</code> in Vercel env vars every ~30 days.</>
                 : claudeError
                   ? <>Error: <code style={{ color: '#d4912a' }}>{claudeError}</code> — refresh the session key.</>
-                  : <>Set <code style={{ color: '#b8d4bd' }}>CLAUDE_SESSION_KEY</code> + <code style={{ color: '#b8d4bd' }}>CLAUDE_ORG_ID</code> in Vercel env vars.</>
-              }
+                  : <>Set <code style={{ color: '#b8d4bd' }}>CLAUDE_SESSION_KEY</code> + <code style={{ color: '#b8d4bd' }}>CLAUDE_ORG_ID</code> in Vercel env vars.</>}
             </p>
           </div>
-          <a
-            href="https://claude.ai/analytics/activity"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              display: 'flex', alignItems: 'center', gap: 5,
-              padding: '5px 12px', borderRadius: 6,
-              background: `${bannerAccent}26`, border: `1px solid ${bannerAccent}66`,
-              color: bannerAccent, fontSize: '0.7rem', fontWeight: 700,
-              letterSpacing: '0.06em', textTransform: 'uppercase', textDecoration: 'none', flexShrink: 0,
-            }}
-          >
+          <a href="https://claude.ai/analytics/activity" target="_blank" rel="noopener noreferrer" style={{
+            display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 6,
+            background: `${bannerAccent}26`, border: `1px solid ${bannerAccent}66`,
+            color: bannerAccent, fontSize: '0.7rem', fontWeight: 700,
+            letterSpacing: '0.06em', textTransform: 'uppercase', textDecoration: 'none', flexShrink: 0,
+          }}>
             Open analytics <ExternalLink size={11} />
           </a>
         </div>
 
         <SectionHeader eyebrow="1. AI TOOL USAGE" title="Claude usage across departments" />
-
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
-          <BenchKPICard
-            label="Total Claude Spend"
-            value={claudeLoading ? '—' : formatCurrency(claudeSpend)}
-            showInfo
-            tooltip={`Sum of per-user Claude spend in the ${period} window.`}
-          />
+          <BenchKPICard label="Total Claude Spend" value={claudeLoading ? '—' : formatCurrency(claudeSpend)} showInfo tooltip={`Sum of per-user Claude spend in the ${period} window.`} />
           <BenchKPICard
             label="Active Users"
             value={claudeLoading ? '—' : claudeActive}
             showInfo
-            tooltip={`Distinct users with any Claude spend in the ${period} window. ${filteredUsers.length} seats on record.`}
-            subBadge={
-              <span style={{ fontSize: '0.65rem', color: '#6a8870' }}>
-                {claudeActive}/{filteredUsers.length} seats active
-              </span>
-            }
+            tooltip={`Distinct users with any Claude spend. ${filteredUsers.length} seats on record.`}
+            subBadge={<span style={{ fontSize: '0.65rem', color: '#6a8870' }}>{claudeActive}/{filteredUsers.length} seats active</span>}
           />
-          <BenchKPICard
-            label="Estimated Hours Saved"
-            value={claudeLoading ? '—' : formatHours(claudeHours)}
-            showInfo
-            tooltip={`$1 of Claude spend ≈ ${HOURS_PER_DOLLAR} hours of augmented work.`}
-          />
-          <BenchKPICard
-            label="Estimated Revenue Impact"
-            value={claudeLoading ? '—' : formatCurrency(claudeHours * HOURLY_RATE)}
-            showInfo
-            tooltip={`Hours saved × $${HOURLY_RATE}/hr.`}
-          />
+          <BenchKPICard label="Estimated Hours Saved" value={claudeLoading ? '—' : formatHours(claudeHours)} showInfo tooltip={`$1 of Claude spend ≈ ${HOURS_PER_DOLLAR} hours of augmented work.`} />
+          <BenchKPICard label="Estimated Revenue Impact" value={claudeLoading ? '—' : formatCurrency(claudeHours * HOURLY_RATE)} showInfo tooltip={`Hours saved × $${HOURLY_RATE}/hr.`} />
         </div>
 
         {unmappedUsers.length > 0 && (
@@ -391,7 +527,6 @@ export function AIToolsPage() {
         )}
 
         <SectionHeader eyebrow="2. DEPARTMENT BREAKDOWN" title="Usage by department" />
-
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 28 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.6fr 1fr 1.4fr 1.1fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
             {['Department', 'Company', 'Users', 'Spend', 'Share', 'Top User'].map((h) => (
@@ -400,9 +535,7 @@ export function AIToolsPage() {
           </div>
           {filteredDepts.length === 0 ? (
             <div style={{ padding: 20, textAlign: 'center' }}>
-              <p style={{ fontSize: '0.8rem', color: '#6a8870' }}>
-                {claudeLoading ? 'Loading…' : 'Connect the Admin API key to see data.'}
-              </p>
+              <p style={{ fontSize: '0.8rem', color: '#6a8870' }}>{claudeLoading ? 'Loading…' : 'Connect the Admin API key to see data.'}</p>
             </div>
           ) : filteredDepts.map((d, i) => {
             const pct = (d.spendUsd / maxDeptSpend) * 100;
@@ -415,11 +548,7 @@ export function AIToolsPage() {
                 opacity: d.spendUsd === 0 ? 0.55 : 1,
               }}>
                 <span style={{ fontSize: '0.85rem', color: '#e4ede6', fontWeight: 500 }}>{d.department}</span>
-                <span style={{
-                  fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
-                  color: cl.color, padding: '2px 8px', background: `${cl.color}18`,
-                  border: `1px solid ${cl.color}40`, borderRadius: 4, justifySelf: 'start',
-                }}>{cl.text}</span>
+                <span style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: cl.color, padding: '2px 8px', background: `${cl.color}18`, border: `1px solid ${cl.color}40`, borderRadius: 4, justifySelf: 'start' }}>{cl.text}</span>
                 <span style={{ fontSize: '0.85rem', color: '#8aad90' }}>{d.users}</span>
                 <span style={{ fontSize: '0.85rem', color: '#e4ede6', fontWeight: 600 }}>{formatCurrency(d.spendUsd)}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -437,7 +566,6 @@ export function AIToolsPage() {
         </div>
 
         <SectionHeader eyebrow="3. SEAT ROSTER" title="Team members by department" />
-
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '48px 1.5fr 1fr 1fr 1fr 1.2fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
             {['#', 'Person', 'Email', 'Department', 'Company', 'Spend'].map((h) => (
@@ -456,8 +584,7 @@ export function AIToolsPage() {
                 opacity: u.spendUsd === 0 ? 0.5 : 1,
               }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75rem', color: '#6a8870', fontWeight: 600 }}>
-                  {isTop && <Trophy size={12} color="#d4912a" />}
-                  {i + 1}
+                  {isTop && <Trophy size={12} color="#d4912a" />}{i + 1}
                 </span>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                   <span style={{ fontSize: '0.85rem', color: '#e4ede6', fontWeight: 500 }}>
@@ -467,11 +594,7 @@ export function AIToolsPage() {
                 </div>
                 <span style={{ fontSize: '0.72rem', color: '#8aad90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.email}</span>
                 <span style={{ fontSize: '0.8rem', color: '#8aad90' }}>{u.department}</span>
-                <span style={{
-                  fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
-                  color: cl.color, padding: '2px 8px', background: `${cl.color}18`,
-                  border: `1px solid ${cl.color}40`, borderRadius: 4, justifySelf: 'start',
-                }}>{cl.text}</span>
+                <span style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: cl.color, padding: '2px 8px', background: `${cl.color}18`, border: `1px solid ${cl.color}40`, borderRadius: 4, justifySelf: 'start' }}>{cl.text}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div style={{ flex: 1, height: 6, background: '#112014', borderRadius: 3, overflow: 'hidden' }}>
                     <div style={{ width: `${pct}%`, height: '100%', background: cl.color }} />
@@ -489,7 +612,6 @@ export function AIToolsPage() {
             </div>
           )}
         </div>
-
         <p style={{ fontSize: '0.7rem', color: '#6a8870', marginTop: 16, lineHeight: 1.5 }}>
           Source: claude.ai internal analytics · {TEAM.length}-person roster in <code style={{ color: '#8aad90' }}>lib/aiToolsTeam.ts</code> · cached 25h · refreshed daily via Vercel cron.
         </p>
@@ -499,18 +621,11 @@ export function AIToolsPage() {
 
   function NotConnectedView({ toolDef }: { toolDef: ToolDef }) {
     return (
-      <div style={{
-        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        gap: 16, padding: '80px 24px', textAlign: 'center',
-      }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: '80px 24px', textAlign: 'center' }}>
         <Plug size={40} color="#2a4030" />
         <div>
-          <h3 style={{ fontSize: '1.2rem', fontWeight: 600, color: '#6a8870', margin: '0 0 8px 0' }}>
-            {toolDef.label} not connected
-          </h3>
-          <p style={{ fontSize: '0.85rem', color: '#4a6450', margin: 0, maxWidth: 400, lineHeight: 1.6 }}>
-            {toolDef.connectHint}
-          </p>
+          <h3 style={{ fontSize: '1.2rem', fontWeight: 600, color: '#6a8870', margin: '0 0 8px 0' }}>{toolDef.label} not connected</h3>
+          <p style={{ fontSize: '0.85rem', color: '#4a6450', margin: 0, maxWidth: 400, lineHeight: 1.6 }}>{toolDef.connectHint}</p>
         </div>
       </div>
     );
@@ -518,18 +633,18 @@ export function AIToolsPage() {
 
   const activeTool = TOOLS.find((t) => t.key === tool);
 
+  const handleRefresh = () => {
+    refreshClaude();
+    refreshSupabase();
+  };
+
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
         {/* Top bar */}
-        <div style={{
-          padding: '12px 24px 0',
-          flexShrink: 0,
-          borderBottom: '1px solid #1a2c1d',
-          display: 'flex', flexDirection: 'column', gap: 12,
-        }}>
-          {/* Row 1: Period tabs + company filter + refresh */}
+        <div style={{ padding: '12px 24px 0', flexShrink: 0, borderBottom: '1px solid #1a2c1d', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Row 1 */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <PeriodTabs active={period} onChange={setPeriod} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -539,15 +654,13 @@ export function AIToolsPage() {
                 {companyPill('willowpack', 'Willowpack')}
               </div>
               <button
-                onClick={() => refreshClaude()}
+                onClick={handleRefresh}
                 disabled={refreshing}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6,
-                  background: 'transparent', border: '1px solid #1a2c1d',
-                  borderRadius: 6, padding: '5px 10px',
-                  cursor: refreshing ? 'not-allowed' : 'pointer',
-                  color: '#6a8870', fontSize: '0.65rem', fontWeight: 600,
-                  letterSpacing: '0.1em', textTransform: 'uppercase',
+                  background: 'transparent', border: '1px solid #1a2c1d', borderRadius: 6, padding: '5px 10px',
+                  cursor: refreshing ? 'not-allowed' : 'pointer', color: '#6a8870',
+                  fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase',
                   opacity: refreshing ? 0.5 : 1,
                 }}
               >
@@ -557,31 +670,29 @@ export function AIToolsPage() {
             </div>
           </div>
 
-          {/* Row 2: Tool selector */}
+          {/* Row 2: Tool tabs */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 0 }}>
-            {toolPill('all', 'All Tools')}
+            {/* All tools pill */}
+            <button onClick={() => setTool('all')} style={{
+              padding: '5px 14px', borderRadius: 6, cursor: 'pointer',
+              background: tool === 'all' ? '#3dba62' : 'transparent',
+              color: tool === 'all' ? '#050d07' : '#8aad90',
+              border: `1px solid ${tool === 'all' ? '#3dba62' : '#1a2c1d'}`,
+              fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+            }}>All Tools</button>
+
             {TOOLS.map((t) => {
               const active = tool === t.key;
               return (
-                <button
-                  key={t.key}
-                  onClick={() => setTool(t.key)}
-                  style={{
-                    padding: '5px 14px', borderRadius: 6, cursor: 'pointer',
-                    background: active ? t.color + '22' : 'transparent',
-                    color: active ? t.color : '#8aad90',
-                    border: `1px solid ${active ? t.color + '66' : '#1a2c1d'}`,
-                    fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em',
-                    textTransform: 'uppercase',
-                    display: 'flex', alignItems: 'center', gap: 6,
-                  }}
-                >
-                  {/* Connected dot */}
-                  <span style={{
-                    width: 6, height: 6, borderRadius: '50%',
-                    background: t.connected ? t.color : '#3a5540',
-                    display: 'inline-block',
-                  }} />
+                <button key={t.key} onClick={() => setTool(t.key)} style={{
+                  padding: '5px 14px', borderRadius: 6, cursor: 'pointer',
+                  background: active ? t.color + '22' : 'transparent',
+                  color: active ? t.color : '#8aad90',
+                  border: `1px solid ${active ? t.color + '66' : '#1a2c1d'}`,
+                  fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: t.connected ? t.color : '#3a5540', display: 'inline-block' }} />
                   {t.label}
                 </button>
               );
@@ -591,9 +702,10 @@ export function AIToolsPage() {
 
         {/* Content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px' }} className="custom-scroll">
-          {tool === 'all' && <AllToolsView />}
-          {tool === 'claude' && <ClaudeView />}
-          {tool !== 'all' && tool !== 'claude' && activeTool && <NotConnectedView toolDef={activeTool} />}
+          {tool === 'all'      && <AllToolsView />}
+          {tool === 'claude'   && <ClaudeView />}
+          {tool === 'supabase' && <SupabaseView />}
+          {tool !== 'all' && tool !== 'claude' && tool !== 'supabase' && activeTool && <NotConnectedView toolDef={activeTool} />}
           <div style={{ height: 24 }} />
         </div>
 
