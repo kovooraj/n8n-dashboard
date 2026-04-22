@@ -179,8 +179,12 @@ async function run(
 export async function GET(request: NextRequest) {
   const ua = request.headers.get('user-agent') ?? '';
   const auth = request.headers.get('authorization') ?? '';
+  const querySecret = request.nextUrl.searchParams.get('secret');
   const isCron = ua.toLowerCase().startsWith('vercel-cron');
-  const hasSecret = process.env.CRON_SECRET && auth === `Bearer ${process.env.CRON_SECRET}`;
+  const hasSecret = process.env.CRON_SECRET && (
+    auth === `Bearer ${process.env.CRON_SECRET}` ||
+    querySecret === process.env.CRON_SECRET
+  );
 
   if (!isCron && !hasSecret) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -213,5 +217,6 @@ export async function GET(request: NextRequest) {
   });
 
   const allOk = settled.every((r) => r.status !== 'error');
+  console.log('[sync-daily] results:', JSON.stringify(settled));
   return NextResponse.json({ date: targetDate, results: settled }, { status: allOk ? 200 : 207 });
 }

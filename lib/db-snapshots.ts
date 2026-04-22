@@ -37,7 +37,7 @@ export async function writeSnapshots(
   const { error } = await getSupabase()
     .from('dashboard_daily_snapshots')
     .upsert(rows, { onConflict: 'date,source' });
-  if (error) console.error(`DB write error [${source}]:`, error.message);
+  if (error) throw new Error(`DB write error [${source}]: ${error.message}`);
 }
 
 /** Store a full JSON payload (e.g. Claude leaderboard, Anthropic usage) keyed by date + source. */
