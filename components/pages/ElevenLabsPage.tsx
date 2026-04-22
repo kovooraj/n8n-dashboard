@@ -128,7 +128,7 @@ export function ElevenLabsPage() {
             label="# of Calls Auto Resolved"
             value={loading ? '—' : resolvedCount.toLocaleString()}
             showInfo
-            tooltip={`Calls handled end-to-end by the AI voice agent without transferring to a human: total calls × (100 − transfer rate). Total calls ${loading ? 0 : (totals?.calls ?? 0).toLocaleString()} × ${loading ? 0 : deflectionRate}% deflection for the ${period} window.`}
+            tooltip={`Calls the AI voice agent handled end-to-end without transferring to a human. Formula: total calls × (deflection rate ÷ 100) = ${loading ? 0 : (totals?.calls ?? 0).toLocaleString()} × ${loading ? 0 : deflectionRate}% = ${loading ? 0 : resolvedCount.toLocaleString()} calls for the ${period} window.`}
           />
           <BenchKPICard
             label="Transferred to Live Agent"
@@ -152,7 +152,7 @@ export function ElevenLabsPage() {
             label="CSAT Score"
             value={loading ? '—' : (totals && totals.csat > 0 ? `${totals.csat}%` : 'N/A')}
             showInfo
-            tooltip={`Caller satisfaction rating averaged across daily Notion rows. Shows N/A when no CSAT data has been recorded for the ${period} window.`}
+            tooltip={`Caller satisfaction score averaged across daily snapshot rows. Shows N/A when no CSAT data has been recorded for the ${period} window — enable post-call surveys to populate this.`}
           />
         </div>
 
