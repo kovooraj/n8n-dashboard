@@ -1,5 +1,5 @@
 import 'server-only';
-import { supabase } from './supabase';
+import { getSupabase } from './supabase';
 import type { RawSnapshot } from './aggregate';
 
 export async function readSnapshots(
@@ -7,7 +7,7 @@ export async function readSnapshots(
   fromDate: string,
   toDate: string,
 ): Promise<RawSnapshot[]> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('dashboard_daily_snapshots')
     .select('date, metrics')
     .eq('source', source)
@@ -34,7 +34,7 @@ export async function writeSnapshots(
     metrics: s.metrics,
     synced_at: new Date().toISOString(),
   }));
-  const { error } = await supabase
+  const { error } = await getSupabase()
     .from('dashboard_daily_snapshots')
     .upsert(rows, { onConflict: 'date,source' });
   if (error) console.error(`DB write error [${source}]:`, error.message);
@@ -42,7 +42,7 @@ export async function writeSnapshots(
 
 /** Store a full JSON payload (e.g. Claude leaderboard, Anthropic usage) keyed by date + source. */
 export async function writePayload(source: string, date: string, payload: unknown): Promise<void> {
-  const { error } = await supabase
+  const { error } = await getSupabase()
     .from('dashboard_daily_snapshots')
     .upsert(
       [{ date, source, metrics: {}, payload, synced_at: new Date().toISOString() }],
@@ -53,7 +53,7 @@ export async function writePayload(source: string, date: string, payload: unknow
 
 /** Read a full JSON payload stored by writePayload. Returns null if not found. */
 export async function readPayload<T>(source: string, date: string): Promise<T | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('dashboard_daily_snapshots')
     .select('payload')
     .eq('source', source)
