@@ -57,15 +57,18 @@ async function fetchRankings(
   orgId: string,
   sessionKey: string,
   startAt: string,
-  limit = 500,
+  limit = 100,
 ): Promise<RankingsResp> {
   const url = `https://claude.ai/api/organizations/${orgId}/analytics/users/rankings?metric=spend&start_date=${startAt}&limit=${limit}`;
   const resp = await fetch(url, {
     headers: {
       cookie: `sessionKey=${sessionKey}`,
-      accept: '*/*',
+      accept: 'application/json, text/plain, */*',
+      'accept-language': 'en-US,en;q=0.9',
+      referer: 'https://claude.ai/',
+      origin: 'https://claude.ai',
       'anthropic-client-platform': 'web_claude_ai',
-      'user-agent': 'Mozilla/5.0 (compatible; n8n-dashboard/1.0)',
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     },
     cache: 'no-store',
   });
@@ -213,7 +216,7 @@ async function buildPayload(
 const getCached = unstable_cache(
   async (period: DashboardPeriod, orgId: string, sessionKey: string) =>
     buildPayload(orgId, sessionKey, period),
-  ['claude-leaderboard-v1'],
+  ['claude-leaderboard-v2'],
   { revalidate: CACHE_REVALIDATE_SEC, tags: [CACHE_TAG] },
 );
 
