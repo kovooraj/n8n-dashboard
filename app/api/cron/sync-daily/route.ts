@@ -129,12 +129,19 @@ async function fetchLeaderboardSnapshot(targetDate: string): Promise<RawSnapshot
   const resp = await fetch(url, {
     headers: {
       cookie: `sessionKey=${sessionKey}`,
-      accept: '*/*',
+      accept: 'application/json, text/plain, */*',
+      'accept-language': 'en-US,en;q=0.9',
+      referer: 'https://claude.ai/',
+      origin: 'https://claude.ai',
       'anthropic-client-platform': 'web_claude_ai',
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     },
     cache: 'no-store',
   });
-  if (!resp.ok) throw new Error(`claude.ai rankings ${resp.status}`);
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    throw new Error(`claude.ai rankings ${resp.status}: ${body.slice(0, 200)}`);
+  }
 
   const data = await resp.json() as { users?: { email_address?: string; value?: number; seat_tier?: string }[] };
   const users = data.users ?? [];
