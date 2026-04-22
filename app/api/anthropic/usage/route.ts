@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { unstable_cache, revalidateTag } from 'next/cache';
 import type { DashboardPeriod } from '@/lib/types';
 import type { Company } from '@/lib/aiToolsTeam';
+import { readPayload, writePayload, todayUTC } from '@/lib/db-snapshots';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -118,7 +119,15 @@ async function fetchWorkspaces(adminKey: string): Promise<Workspace[]> {
   return out.filter((w) => !w.archived_at);
 }
 
-async function fetchUsageByWorkspace(adminKey: string, startingAt: string, endingAt: string) {
+/** Pick bucket_width + limit that stays within Anthropic's 31-bucket-per-page cap. */
+function bucketParams(days: number): { bucket_width: string; limit: string } {
+  if (days <= 31) return { bucket_width: '1d', limit: '31' };
+  if (days <= 91) return { bucket_width: '1w', limit: '14' };
+  return { bucket_width: '1m', limit: '13' };
+}
+
+async function fetchUsageByWorkspace(adminKey: string, startingAt: string, endingAt: string, days: number) {
+  const { bucket_width, limit } = bucketParams(days);
   const buckets: UsageBucket[] = [];
   let cursor: string | null = null;
   let guard = 0;
@@ -126,9 +135,9 @@ async function fetchUsageByWorkspace(adminKey: string, startingAt: string, endin
     const params = new URLSearchParams();
     params.set('starting_at', startingAt);
     params.set('ending_at', endingAt);
-    params.set('bucket_width', '1d');
+    params.set('bucket_width', bucket_width);
     params.append('group_by[]', 'workspace_id');
-    params.set('limit', '1000');
+    params.set('limit', limit);
     if (cursor) params.set('page', cursor);
     const data = await anthropicGet<UsageReportResp>(
       `/v1/organizations/usage_report/messages?${params.toString()}`,
@@ -141,7 +150,8 @@ async function fetchUsageByWorkspace(adminKey: string, startingAt: string, endin
   return buckets;
 }
 
-async function fetchCostByWorkspace(adminKey: string, startingAt: string, endingAt: string) {
+async function fetchCostByWorkspace(adminKey: string, startingAt: string, endingAt: string, days: number) {
+  const { bucket_width, limit } = bucketParams(days);
   const buckets: CostBucket[] = [];
   let cursor: string | null = null;
   let guard = 0;
@@ -149,9 +159,9 @@ async function fetchCostByWorkspace(adminKey: string, startingAt: string, ending
     const params = new URLSearchParams();
     params.set('starting_at', startingAt);
     params.set('ending_at', endingAt);
-    params.set('bucket_width', '1d');
+    params.set('bucket_width', bucket_width);
     params.append('group_by[]', 'workspace_id');
-    params.set('limit', '1000');
+    params.set('limit', limit);
     if (cursor) params.set('page', cursor);
     try {
       const data = await anthropicGet<CostReportResp>(
@@ -225,8 +235,8 @@ async function buildPayload(adminKey: string, days: number): Promise<Payload> {
 
   const [workspaces, usageBuckets, costBuckets] = await Promise.all([
     fetchWorkspaces(adminKey),
-    fetchUsageByWorkspace(adminKey, startingAt, endingAt),
-    fetchCostByWorkspace(adminKey, startingAt, endingAt),
+    fetchUsageByWorkspace(adminKey, startingAt, endingAt, days),
+    fetchCostByWorkspace(adminKey, startingAt, endingAt, days),
   ]);
 
   const wsById = new Map(workspaces.map((w) => [w.id, w]));
@@ -345,7 +355,26 @@ export async function GET(request: NextRequest) {
   if (forceRefresh) revalidateTag(CACHE_TAG, 'max');
 
   try {
+    const dbKey = `anthropic-usage-${period}`;
+    const today = todayUTC();
+
+    // Serve from DB if today's payload is already stored and not a forced refresh
+    if (!forceRefresh && process.env.NEXT_PUBLIC_SUPABASE_URL) {
+      const cached = await readPayload<Payload>(dbKey, today).catch(() => null);
+      if (cached) {
+        return NextResponse.json(cached, {
+          headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+        });
+      }
+    }
+
     const payload = await getCached(lookbackDays(period), adminKey);
+
+    // Persist today's result for fast reads for the rest of the day
+    if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+      writePayload(dbKey, today, payload).catch(console.error);
+    }
+
     return NextResponse.json(payload, {
       headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
     });
