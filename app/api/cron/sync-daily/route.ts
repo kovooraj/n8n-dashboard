@@ -65,7 +65,7 @@ async function fetchAnthropicUsageSnapshot(targetDate: string): Promise<RawSnaps
   params.set('ending_at', endingAt);
   params.set('bucket_width', '1d');
   params.append('group_by[]', 'workspace_id');
-  params.set('limit', '1000');
+  params.set('limit', '31');
 
   const [usageResp, costResp] = await Promise.all([
     fetch(`https://api.anthropic.com/v1/organizations/usage_report/messages?${params}`, {
