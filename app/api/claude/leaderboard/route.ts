@@ -239,7 +239,7 @@ export async function GET(request: NextRequest) {
   const ua = request.headers.get('user-agent') ?? '';
   const isCron = ua.toLowerCase().startsWith('vercel-cron');
   const forceRefresh = isCron || searchParams.get('refresh') === '1';
-  if (forceRefresh) revalidateTag(CACHE_TAG, 'max');
+  if (forceRefresh) revalidateTag(CACHE_TAG);
 
   try {
     const dbKey = `claude-leaderboard-${period}`;

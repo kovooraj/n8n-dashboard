@@ -749,10 +749,12 @@ export function AIToolsPage() {
 
         {/* Content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px' }} className="custom-scroll">
-          {tool === 'all'      && <AllToolsView />}
-          {tool === 'claude'   && <ClaudeView />}
-          {tool === 'supabase' && <SupabaseView />}
-          {tool !== 'all' && tool !== 'claude' && tool !== 'supabase' && activeTool && <NotConnectedView toolDef={activeTool} />}
+          {/* Views called as plain functions to avoid new component-type
+              identities on each render (which would cause unmount/remount). */}
+          {tool === 'all'      && AllToolsView()}
+          {tool === 'claude'   && ClaudeView()}
+          {tool === 'supabase' && SupabaseView()}
+          {tool !== 'all' && tool !== 'claude' && tool !== 'supabase' && activeTool && NotConnectedView({ toolDef: activeTool })}
           <div style={{ height: 24 }} />
         </div>
 

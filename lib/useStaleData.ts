@@ -33,7 +33,11 @@ export function useStaleData<T>(
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // On background refresh, immediately serve stale data from localStorage
+    // On a fresh deps-triggered run, reset the cache flag so we correctly
+    // show loading=true when there is no cache for the NEW cacheKey.
+    if (!isRefresh) hasCacheRef.current = false;
+
+    // Immediately serve stale data from localStorage (if available for this key)
     if (!isRefresh) {
       try {
         const raw = localStorage.getItem(`swr:${cacheKey}`);
