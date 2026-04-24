@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import { useStaleData } from '@/lib/useStaleData';
 import { Brain, ExternalLink, RefreshCw, Trophy, Plug, Database } from 'lucide-react';
 import { PeriodTabs } from '@/components/PeriodTabs';
@@ -150,6 +150,40 @@ export function AIToolsPage() {
   const [tool, setTool] = useState<ToolFilter>('all');
   const [hideCompleted, setHideCompleted] = useState(true);
 
+  // ── Roster override state ────────────────────────────────────────────────────
+  type RosterOverrides = Record<string, { department: string; companies: Company[] }>;
+  const [rosterOverrides, setRosterOverrides] = useState<RosterOverrides>({});
+  const [rosterEdits,     setRosterEdits]     = useState<RosterOverrides>({});
+  const [rosterSaveStatus, setRosterSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  useEffect(() => {
+    fetch('/api/claude/roster')
+      .then((r) => r.json())
+      .then(({ overrides }: { overrides: RosterOverrides }) => {
+        setRosterOverrides(overrides ?? {});
+        setRosterEdits(overrides ?? {});
+      })
+      .catch(() => {});
+  }, []);
+
+  const saveRosterOverrides = useCallback(async () => {
+    setRosterSaveStatus('saving');
+    try {
+      const resp = await fetch('/api/claude/roster', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ overrides: rosterEdits }),
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      setRosterOverrides(rosterEdits);
+      setRosterSaveStatus('saved');
+      setTimeout(() => setRosterSaveStatus('idle'), 3000);
+    } catch {
+      setRosterSaveStatus('error');
+      setTimeout(() => setRosterSaveStatus('idle'), 3000);
+    }
+  }, [rosterEdits]);
+
   // ── Claude data ─────────────────────────────────────────────────────────────
   const { data: claudeData, loading: claudeLoading, refreshing, refresh: refreshClaude } = useStaleData<ClaudePayload & { error?: string }>(
     `claude-leaderboard-${period}`,
@@ -192,19 +226,45 @@ export function AIToolsPage() {
 
   // ── Claude derived ───────────────────────────────────────────────────────────
   const claudeUsers = claudeData?.users ?? [];
-  const claudeDepts = claudeData?.departments ?? [];
+  // claudeData?.departments is the API-pre-rolled version; we re-roll client-side
+  // via filteredDepts memo below so overrides are reflected immediately.
   const claudeDataAsOf = claudeData?.dataAsOf;
   const claudeConnected = !claudeLoading && !!claudeData && !claudeData.error;
   const claudeError = claudeData?.error ?? null;
 
+  // Apply saved overrides to raw users before any filtering
+  const effectiveUsers = useMemo(() =>
+    claudeUsers.map((u) => {
+      const ov = rosterOverrides[u.email.toLowerCase()];
+      return ov ? { ...u, department: ov.department, companies: ov.companies } : u;
+    }),
+    [claudeUsers, rosterOverrides],
+  );
+
   const filteredUsers = useMemo(
-    () => (company === 'all' ? claudeUsers : claudeUsers.filter((u) => u.companies.includes(company))),
-    [claudeUsers, company],
+    () => (company === 'all' ? effectiveUsers : effectiveUsers.filter((u) => u.companies.includes(company))),
+    [effectiveUsers, company],
   );
-  const filteredDepts = useMemo(
-    () => (company === 'all' ? claudeDepts : claudeDepts.filter((d) => d.companies.includes(company))),
-    [claudeDepts, company],
-  );
+
+  // Re-roll up departments from override-applied, filtered users
+  const filteredDepts = useMemo(() => {
+    const deptMap = new Map<string, DeptRow>();
+    for (const u of filteredUsers) {
+      const cur = deptMap.get(u.department) ?? {
+        department: u.department,
+        companies: [] as Company[],
+        users: 0, spendUsd: 0, topUser: '—', topSpend: -1,
+      };
+      for (const c of u.companies) {
+        if (!cur.companies.includes(c)) cur.companies.push(c);
+      }
+      cur.users += 1;
+      cur.spendUsd += u.spendUsd;
+      if (u.spendUsd > cur.topSpend) { cur.topSpend = u.spendUsd; cur.topUser = u.name; }
+      deptMap.set(u.department, cur);
+    }
+    return Array.from(deptMap.values()).sort((a, b) => b.spendUsd - a.spendUsd);
+  }, [filteredUsers]);
 
   const claudeSpend = filteredUsers.reduce((s, u) => s + u.spendUsd, 0);
   const claudeActive = filteredUsers.filter((u) => u.spendUsd > 0).length;
@@ -767,6 +827,142 @@ export function AIToolsPage() {
         <p style={{ fontSize: '0.7rem', color: '#6a8870', marginTop: 16, lineHeight: 1.5 }}>
           Source: claude.ai internal analytics · {TEAM.length}-person roster in <code style={{ color: '#8aad90' }}>lib/aiToolsTeam.ts</code> · cached 25h · refreshed daily via Vercel cron.
         </p>
+
+        {/* Section 4 — Roster Settings */}
+        <div style={{ marginTop: 32 }}>
+          <SectionHeader eyebrow="4. SETTINGS" title="Manage roster assignments" />
+          <p style={{ fontSize: '0.75rem', color: '#6a8870', marginBottom: 16, lineHeight: 1.5 }}>
+            Edit each team member&apos;s department label and company attribution. Changes are saved to Supabase and applied immediately — no code deploy needed.
+          </p>
+
+          <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 14 }}>
+            {/* Column headers */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 1.4fr 1fr 80px', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
+              {['Member', 'Department', 'Company', ''].map((h, i) => (
+                <span key={i} style={{ fontSize: '0.6rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
+              ))}
+            </div>
+
+            {TEAM.map((m, i) => {
+              const email = m.email.toLowerCase();
+              const saved = rosterOverrides[email];
+              const edit  = rosterEdits[email] ?? { department: m.department, companies: m.companies };
+              const isDirty = JSON.stringify(rosterEdits[email]) !== JSON.stringify(rosterOverrides[email]);
+              const isOverridden = !!saved;
+
+              return (
+                <div key={email} style={{
+                  display: 'grid', gridTemplateColumns: '1.8fr 1.4fr 1fr 80px',
+                  padding: '10px 16px', alignItems: 'center',
+                  borderBottom: i < TEAM.length - 1 ? '1px solid #1a2c1d' : 'none',
+                  background: isDirty ? 'rgba(212,145,42,0.04)' : 'transparent',
+                }}>
+                  {/* Name + email */}
+                  <div style={{ minWidth: 0 }}>
+                    <p style={{ fontSize: '0.82rem', fontWeight: 600, color: '#e4ede6', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {m.name}
+                      {isOverridden && <span style={{ fontSize: '0.55rem', fontWeight: 700, color: '#4a9eca', letterSpacing: '0.08em', padding: '1px 5px', background: 'rgba(74,158,202,0.12)', border: '1px solid rgba(74,158,202,0.3)', borderRadius: 3 }}>CUSTOM</span>}
+                    </p>
+                    <p style={{ fontSize: '0.68rem', color: '#6a8870', margin: '2px 0 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.email}</p>
+                  </div>
+
+                  {/* Department input */}
+                  <input
+                    value={edit.department}
+                    onChange={(e) => setRosterEdits((prev) => ({
+                      ...prev,
+                      [email]: { ...edit, department: e.target.value },
+                    }))}
+                    style={{
+                      background: '#0a1410', border: `1px solid ${isDirty ? 'rgba(212,145,42,0.4)' : '#1a2c1d'}`,
+                      borderRadius: 4, color: '#e4ede6', fontSize: '0.78rem',
+                      padding: '5px 8px', outline: 'none', width: '90%',
+                    }}
+                  />
+
+                  {/* Company toggles */}
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    {(['sinalite', 'willowpack'] as Company[]).map((c) => {
+                      const active = edit.companies.includes(c);
+                      const col = c === 'sinalite' ? '#3dba62' : '#4a9eca';
+                      return (
+                        <button key={c} onClick={() => {
+                          const next = active
+                            ? edit.companies.filter((x) => x !== c)
+                            : [...edit.companies, c];
+                          if (next.length === 0) return; // must keep at least one
+                          setRosterEdits((prev) => ({ ...prev, [email]: { ...edit, companies: next as Company[] } }));
+                        }} style={{
+                          padding: '2px 7px', borderRadius: 4, cursor: 'pointer',
+                          background: active ? `${col}20` : 'transparent',
+                          border: `1px solid ${active ? col + '60' : '#1a2c1d'}`,
+                          color: active ? col : '#4a6450',
+                          fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase',
+                        }}>
+                          {c === 'sinalite' ? 'SL' : 'WP'}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Reset row button */}
+                  <button
+                    onClick={() => {
+                      setRosterEdits((prev) => {
+                        const next = { ...prev };
+                        delete next[email]; // remove override → fall back to static default
+                        return next;
+                      });
+                    }}
+                    title="Reset to static default"
+                    style={{
+                      background: 'transparent', border: '1px solid #1a2c1d', borderRadius: 4,
+                      color: '#6a8870', fontSize: '0.65rem', padding: '3px 8px', cursor: 'pointer',
+                      opacity: isOverridden || isDirty ? 1 : 0.3,
+                    }}
+                  >
+                    Reset
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Save / Reset All */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button
+              onClick={saveRosterOverrides}
+              disabled={rosterSaveStatus === 'saving'}
+              style={{
+                padding: '8px 20px', borderRadius: 6, cursor: rosterSaveStatus === 'saving' ? 'not-allowed' : 'pointer',
+                background: '#3dba62', border: 'none', color: '#050d07',
+                fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+                opacity: rosterSaveStatus === 'saving' ? 0.6 : 1,
+              }}
+            >
+              {rosterSaveStatus === 'saving' ? 'Saving…' : 'Save Changes'}
+            </button>
+            <button
+              onClick={() => setRosterEdits(rosterOverrides)}
+              style={{
+                padding: '8px 16px', borderRadius: 6, cursor: 'pointer',
+                background: 'transparent', border: '1px solid #1a2c1d', color: '#6a8870',
+                fontSize: '0.75rem', fontWeight: 600,
+              }}
+            >
+              Discard Edits
+            </button>
+            {rosterSaveStatus === 'saved' && (
+              <span style={{ fontSize: '0.75rem', color: '#3dba62', fontWeight: 600 }}>✓ Saved successfully</span>
+            )}
+            {rosterSaveStatus === 'error' && (
+              <span style={{ fontSize: '0.75rem', color: '#e05858', fontWeight: 600 }}>✗ Save failed — check Supabase connection</span>
+            )}
+          </div>
+          <p style={{ fontSize: '0.68rem', color: '#4a6450', marginTop: 10, lineHeight: 1.5 }}>
+            SL = SinaLite &nbsp;·&nbsp; WP = Willowpack. Overrides are stored in Supabase and take effect immediately without redeploying. Row &quot;Reset&quot; reverts that person to their static default from <code style={{ color: '#6a8870' }}>aiToolsTeam.ts</code>.
+          </p>
+        </div>
       </>
     );
   }
