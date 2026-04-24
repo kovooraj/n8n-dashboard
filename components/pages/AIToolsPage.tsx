@@ -56,6 +56,19 @@ interface SupabaseProject {
   publicTables: number | null;
 }
 
+interface TableStat {
+  tablename: string;
+  row_count: number;
+  last_activity: string | null;
+}
+
+interface ProjectTableStats {
+  projectId: string;
+  projectName: string;
+  tables: TableStat[];
+  error?: string;
+}
+
 interface SupabaseStats {
   projects: SupabaseProject[];
   buckets: { date: string; syncs: number }[];
@@ -68,6 +81,7 @@ interface SupabaseStats {
     daysWithData: number;
     totalDays: number;
   };
+  projectTableStats: ProjectTableStats[];
   managedByPat: boolean;
 }
 
@@ -360,6 +374,7 @@ export function AIToolsPage() {
     const totals = supabaseData?.snapshotTotals;
     const sources = supabaseData?.sources ?? [];
     const projects = supabaseData?.projects ?? [];
+    const projectTableStats = supabaseData?.projectTableStats ?? [];
     const managedByPat = supabaseData?.managedByPat ?? false;
     const maxRows = Math.max(1, ...sources.map((s) => s.rows));
 
@@ -501,6 +516,87 @@ export function AIToolsPage() {
             );
           })}
         </div>
+
+        {/* Section 4 — Per-project table breakdown */}
+        {(projectTableStats.length > 0 || supabaseLoading) && (
+          <>
+            <SectionHeader eyebrow="4. DATABASE TABLES" title="Tables across all projects" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 24 }}>
+              {supabaseLoading
+                ? [0, 1, 2].map((i) => (
+                    <div key={i} style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, height: 80 }} />
+                  ))
+                : projectTableStats.map((proj) => {
+                    const totalRows = proj.tables.reduce((s, t) => s + (t.row_count ?? 0), 0);
+                    const maxTableRows = Math.max(1, ...proj.tables.map((t) => t.row_count ?? 0));
+                    return (
+                      <div key={proj.projectId} style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden' }}>
+                        {/* Project header row */}
+                        <div style={{
+                          padding: '12px 16px',
+                          borderBottom: proj.tables.length > 0 ? '1px solid #1a2c1d' : 'none',
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <Database size={15} color="#3ecf8e" />
+                            <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e4ede6' }}>{proj.projectName}</span>
+                            <span style={{ fontSize: '0.65rem', color: '#6a8870' }}>{proj.projectId}</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                            {proj.error ? (
+                              <span style={{ fontSize: '0.7rem', color: '#e05858' }}>Query error: {proj.error.slice(0, 80)}</span>
+                            ) : (
+                              <>
+                                <span style={{ fontSize: '0.7rem', color: '#8aad90' }}>{proj.tables.length} table{proj.tables.length !== 1 ? 's' : ''}</span>
+                                <span style={{ fontSize: '0.7rem', color: '#6a8870' }}>·</span>
+                                <span style={{ fontSize: '0.7rem', color: '#8aad90' }}>{totalRows.toLocaleString()} total rows</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        {/* Table rows */}
+                        {proj.tables.length > 0 && (
+                          <>
+                            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr 1.2fr', padding: '8px 16px', borderBottom: '1px solid #1a2c1d' }}>
+                              {['Table', 'Rows', 'Share', 'Last Activity'].map((h) => (
+                                <span key={h} style={{ fontSize: '0.6rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
+                              ))}
+                            </div>
+                            {proj.tables.map((t, i) => {
+                              const pct = maxTableRows > 0 ? ((t.row_count ?? 0) / maxTableRows) * 100 : 0;
+                              return (
+                                <div key={t.tablename} style={{
+                                  display: 'grid', gridTemplateColumns: '2fr 1fr 2fr 1.2fr',
+                                  padding: '10px 16px', alignItems: 'center',
+                                  borderBottom: i < proj.tables.length - 1 ? '1px solid #0d1810' : 'none',
+                                }}>
+                                  <span style={{ fontSize: '0.82rem', fontWeight: 500, color: '#e4ede6', fontFamily: 'monospace' }}>{t.tablename}</span>
+                                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#3ecf8e' }}>{(t.row_count ?? 0).toLocaleString()}</span>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingRight: 16 }}>
+                                    <div style={{ flex: 1, height: 5, background: '#112014', borderRadius: 3, overflow: 'hidden' }}>
+                                      <div style={{ width: `${pct}%`, height: '100%', background: '#3ecf8e' }} />
+                                    </div>
+                                    <span style={{ fontSize: '0.65rem', color: '#6a8870', width: 32, textAlign: 'right' }}>{Math.round(pct)}%</span>
+                                  </div>
+                                  <span style={{ fontSize: '0.7rem', color: '#6a8870' }}>
+                                    {t.last_activity ? timeAgo(t.last_activity) : '—'}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </>
+                        )}
+                        {proj.tables.length === 0 && !proj.error && (
+                          <div style={{ padding: '12px 16px' }}>
+                            <p style={{ fontSize: '0.75rem', color: '#6a8870', margin: 0 }}>No public tables found.</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+            </div>
+          </>
+        )}
 
         <p style={{ fontSize: '0.7rem', color: '#6a8870', lineHeight: 1.5 }}>
           Projects: Supabase Management API {managedByPat ? '(live)' : '(cached — add SUPABASE_ACCESS_TOKEN to Vercel for live discovery)'}

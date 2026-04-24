@@ -15,6 +15,38 @@ const KNOWN_PROJECTS: Record<string, { publicTables: number }> = {
   mkgblixphikyooqkqdqe: { publicTables: 2  },  // SinaLite
 };
 
+export interface TableStat {
+  tablename: string;
+  row_count: number;
+  last_activity: string | null;
+}
+
+export interface ProjectTableStats {
+  projectId: string;
+  projectName: string;
+  tables: TableStat[];
+  error?: string;
+}
+
+async function queryProjectTables(ref: string, pat: string): Promise<TableStat[]> {
+  const resp = await fetch(`${MGMT_API}/projects/${ref}/database/query`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${pat}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      query: `SELECT tablename, COALESCE(n_live_tup, 0) AS row_count, GREATEST(last_analyze, last_autoanalyze) AS last_activity FROM pg_stat_user_tables WHERE schemaname = 'public' ORDER BY n_live_tup DESC`,
+    }),
+    cache: 'no-store',
+  });
+  if (!resp.ok) {
+    const txt = await resp.text().catch(() => '');
+    throw new Error(`Supabase query API ${resp.status}: ${txt.slice(0, 200)}`);
+  }
+  return (await resp.json()) as TableStat[];
+}
+
 interface MgmtProject {
   id: string;
   name: string;
@@ -88,6 +120,31 @@ export async function GET(request: NextRequest) {
     ];
   }
 
+  // ── Per-project table stats (Management API SQL) ─────────────────────────
+  const projectTableStats: ProjectTableStats[] = [];
+  if (pat) {
+    await Promise.all(
+      projects.map(async (p) => {
+        try {
+          const tables = await queryProjectTables(p.id, pat);
+          projectTableStats.push({ projectId: p.id, projectName: p.name, tables });
+          // Update publicTables count with live data
+          const match = projects.find((pr) => pr.id === p.id);
+          if (match) match.publicTables = tables.length;
+        } catch (e) {
+          projectTableStats.push({
+            projectId: p.id,
+            projectName: p.name,
+            tables: [],
+            error: e instanceof Error ? e.message : 'Query failed',
+          });
+        }
+      }),
+    );
+    // Sort to match project order
+    projectTableStats.sort((a, b) => a.projectName.localeCompare(b.projectName));
+  }
+
   // ── AI Projects snapshot stats ────────────────────────────────────────────
   const days = lookbackDays(period);
   const fromDate = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
@@ -151,6 +208,7 @@ export async function GET(request: NextRequest) {
     buckets,
     sources,
     snapshotTotals,
+    projectTableStats,
     period,
     managedByPat: !!pat,
   }, { headers: { 'Cache-Control': 'no-store' } });
