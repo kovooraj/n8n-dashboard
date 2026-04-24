@@ -463,13 +463,22 @@ export function AIToolsPage() {
           ))}
         </div>
 
-        {/* Section 2 — Snapshot activity (AI Projects DB) */}
-        <SectionHeader eyebrow="2. DASHBOARD SNAPSHOTS · AI PROJECTS DB" title="Daily Sync Activity" />
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
-          <BenchKPICard label="Total Rows" value={supabaseLoading ? '—' : (totals?.totalRows ?? 0).toLocaleString()} showInfo tooltip="Snapshot rows in dashboard_daily_snapshots for this period." />
+        {/* Section 2 — Snapshot activity (all sources write to AI Projects DB) */}
+        <SectionHeader eyebrow="2. DASHBOARD SNAPSHOTS · ALL SOURCES" title="Daily Sync Activity" />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+          <BenchKPICard label="Snapshot Rows" value={supabaseLoading ? '—' : (totals?.totalRows ?? 0).toLocaleString()} showInfo tooltip="Rows written to dashboard_daily_snapshots this period (all dashboard sources combined)." />
           <BenchKPICard label="Active Sources" value={supabaseLoading ? '—' : totals?.activeSources ?? 0} showInfo tooltip="Distinct data sources writing snapshots in this period." />
           <BenchKPICard label="Avg Syncs / Day" value={supabaseLoading ? '—' : totals?.avgSyncsPerDay ?? 0} showInfo tooltip="Average rows written per day across all sources." />
           <BenchKPICard label="Coverage" value={supabaseLoading ? '—' : `${totals?.daysWithData ?? 0}/${totals?.totalDays ?? 0}d`} showInfo tooltip="Days with at least one snapshot vs total days in period." />
+          <BenchKPICard
+            label="All DB Rows (live)"
+            value={supabaseLoading || projectTableStats.length === 0
+              ? '—'
+              : projectTableStats.reduce((s, p) => s + p.tables.reduce((ts, t) => ts + (t.row_count ?? 0), 0), 0).toLocaleString()
+            }
+            showInfo
+            tooltip="Live total row count across all public tables in all 3 Supabase projects (AI Projects + SinaLite + Willowpack)."
+          />
         </div>
 
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 24 }}>

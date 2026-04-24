@@ -29,15 +29,26 @@ export interface ProjectTableStats {
 }
 
 async function queryProjectTables(ref: string, pat: string): Promise<TableStat[]> {
+  // Use pg_class (universally accessible) rather than pg_stat_user_tables
+  // which requires pg_read_all_stats on restricted roles.
+  const sql = `
+    SELECT
+      c.relname                           AS tablename,
+      GREATEST(c.reltuples::bigint, 0)   AS row_count,
+      NULL::timestamptz                   AS last_activity
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind = 'r'
+    ORDER BY c.reltuples DESC
+  `.trim();
+
   const resp = await fetch(`${MGMT_API}/projects/${ref}/database/query`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${pat}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      query: `SELECT tablename, COALESCE(n_live_tup, 0) AS row_count, GREATEST(last_analyze, last_autoanalyze) AS last_activity FROM pg_stat_user_tables WHERE schemaname = 'public' ORDER BY n_live_tup DESC`,
-    }),
+    body: JSON.stringify({ query: sql }),
     cache: 'no-store',
   });
   if (!resp.ok) {
@@ -152,7 +163,8 @@ export async function GET(request: NextRequest) {
 
   let buckets: { date: string; syncs: number }[] = [];
   let sources: { source: string; label: string; rows: number }[] = [];
-  let snapshotTotals = { totalRows: 0, activeSources: 0, avgSyncsPerDay: 0, lastSyncedAt: null as string | null, daysWithData: 0, totalDays: days };
+  // days+1 because the range is [fromDate, toDate] inclusive (both endpoints count)
+  let snapshotTotals = { totalRows: 0, activeSources: 0, avgSyncsPerDay: 0, lastSyncedAt: null as string | null, daysWithData: 0, totalDays: days + 1 };
 
   if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
     try {
@@ -195,7 +207,7 @@ export async function GET(request: NextRequest) {
           avgSyncsPerDay: Number((rows.length / Math.max(days, 1)).toFixed(1)),
           lastSyncedAt,
           daysWithData: byDate.size,
-          totalDays: days,
+          totalDays: days + 1,
         };
       }
     } catch (e) {
