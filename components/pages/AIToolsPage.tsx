@@ -227,7 +227,7 @@ export function AIToolsPage() {
   // ── All-tools aggregations ──────────────────────────────────────────────────
   const allToolsData = useMemo(() => [
     { key: 'claude' as ToolFilter,     label: 'Claude',     color: '#d4912a', connected: claudeConnected, spendUsd: claudeSpend, activeUsers: claudeActive, hoursSaved: claudeHours, error: claudeError, loading: claudeLoading },
-    { key: 'supabase' as ToolFilter,   label: 'Supabase',   color: '#3ecf8e', connected: true,            spendUsd: 0,           activeUsers: supabaseData?.snapshotTotals.activeSources ?? 0, hoursSaved: 0, error: null, loading: supabaseLoading },
+    { key: 'supabase' as ToolFilter,   label: 'Supabase',   color: '#3ecf8e', connected: true,            spendUsd: 0,           activeUsers: supabaseData?.snapshotTotals?.activeSources ?? 0, hoursSaved: 0, error: null, loading: supabaseLoading },
     { key: 'chatgpt' as ToolFilter,    label: 'ChatGPT',    color: '#10a37f', connected: false,           spendUsd: 0,           activeUsers: 0, hoursSaved: 0, error: null, loading: false },
     { key: 'gemini' as ToolFilter,     label: 'Gemini',     color: '#4285f4', connected: false,           spendUsd: 0,           activeUsers: 0, hoursSaved: 0, error: null, loading: false },
     { key: 'perplexity' as ToolFilter, label: 'Perplexity', color: '#9b6dff', connected: false,           spendUsd: 0,           activeUsers: 0, hoursSaved: 0, error: null, loading: false },
@@ -297,10 +297,10 @@ export function AIToolsPage() {
                 {t.connected ? (t.key === 'supabase' ? `${t.activeUsers} sources` : t.activeUsers) : '—'}
               </span>
               <span style={{ fontSize: '0.9rem', fontWeight: 600, color: t.connected ? '#e4ede6' : '#3a5540' }}>
-                {t.key === 'supabase' ? `${supabaseData?.snapshotTotals.totalRows ?? '—'} rows` : t.connected ? formatCurrency(t.spendUsd) : '—'}
+                {t.key === 'supabase' ? `${supabaseData?.snapshotTotals?.totalRows ?? '—'} rows` : t.connected ? formatCurrency(t.spendUsd) : '—'}
               </span>
               <span style={{ fontSize: '0.85rem', color: t.connected ? '#8aad90' : '#3a5540' }}>
-                {t.key === 'supabase' ? timeAgo(supabaseData?.snapshotTotals.lastSyncedAt ?? null) : t.connected ? formatHours(t.hoursSaved) : '—'}
+                {t.key === 'supabase' ? timeAgo(supabaseData?.snapshotTotals?.lastSyncedAt ?? null) : t.connected ? formatHours(t.hoursSaved) : '—'}
               </span>
             </div>
           ))}
