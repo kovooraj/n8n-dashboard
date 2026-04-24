@@ -35,6 +35,7 @@ export const TEAM: TeamMember[] = [
   { email: 'piklin.hoe@sinalite.com',        name: 'Pik Lin Hoe',      department: 'Marketing',      companies: ['sinalite', 'willowpack'] },
   { email: 'robert.yang@sinalite.com',       name: 'Robert Yang',      department: 'I.T Team',       companies: ['sinalite', 'willowpack'] },
   { email: 'sairam.raman@sinalite.com',      name: 'Sai Ram Raman',    department: 'Marketing',      companies: ['willowpack'] },
+  { email: 'ai@sinalite.com',                name: 'AI',               department: 'AI Team',        companies: ['sinalite', 'willowpack'] },
   { email: 'support@sinalite.com',           name: 'CX Team',          department: 'CX',             companies: ['sinalite', 'willowpack'] },
 ];
 
