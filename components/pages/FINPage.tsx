@@ -37,10 +37,10 @@ const STATUS_COLORS: Record<string, string> = {
 
 type ChannelFilter = 'all' | 'messenger' | 'email';
 
-const CHANNEL_OPTIONS: { key: ChannelFilter; label: string; icon: string }[] = [
-  { key: 'all',       label: 'All Channels', icon: '⊕' },
-  { key: 'messenger', label: 'Messenger',    icon: '💬' },
-  { key: 'email',     label: 'Email',        icon: '✉' },
+const CHANNEL_OPTIONS: { key: ChannelFilter; label: string }[] = [
+  { key: 'all',       label: 'All Channels' },
+  { key: 'messenger', label: 'Messenger'    },
+  { key: 'email',     label: 'Email'        },
 ];
 
 export function FINPage() {
@@ -116,7 +116,6 @@ export function FINPage() {
                 key={opt.key}
                 onClick={() => setChannel(opt.key)}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 5,
                   padding: '4px 12px', borderRadius: 6, cursor: 'pointer',
                   background: active ? '#1a2c1d' : 'transparent',
                   color: active ? '#e4ede6' : '#8aad90',
@@ -125,7 +124,6 @@ export function FINPage() {
                   letterSpacing: '0.04em', transition: 'all 0.15s',
                 }}
               >
-                <span style={{ fontSize: '0.75rem' }}>{opt.icon}</span>
                 {opt.label}
               </button>
             );

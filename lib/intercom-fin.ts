@@ -14,8 +14,13 @@ interface IntercomConversation {
   ai_agent_participated?: boolean;
   ai_agent?: { resolution_state?: string } | null;
   conversation_rating?: { rating?: number | null } | null;
-  /** source.type: "conversation" = Messenger/chat, "email" = Email, etc. */
-  source?: { type?: string } | null;
+  /**
+   * source.type is ALWAYS "conversation" in Intercom (object-type identifier,
+   * NOT the channel). Use source.subject to distinguish email from Messenger:
+   *   email       → subject is a non-empty string
+   *   messenger   → subject is null / empty string
+   */
+  source?: { type?: string; subject?: string | null; delivered_as?: string | null } | null;
 }
 
 interface IntercomSearchResponse {
@@ -110,28 +115,20 @@ function toISODay(unixSec: number): string {
 }
 
 /**
- * Map Intercom source.type → our channel key.
- * "conversation" = Intercom Messenger / chat widget
- * "email"        = Email channel
- * Everything else is counted only in the "all" totals.
+ * Determine channel from the Intercom conversation source object.
+ *
+ * source.type is ALWAYS "conversation" in Intercom — it is the object-type
+ * identifier, NOT the delivery channel.  The reliable signal is source.subject:
+ *   • Email conversations always have a non-empty subject line.
+ *   • Messenger / chat conversations have null or empty subject.
  */
-function toChannel(sourceType: string | undefined | null): 'messenger' | 'email' | 'other' {
-  if (!sourceType) return 'other';
-  if (sourceType === 'email') return 'email';
-  // "conversation" is the Intercom Messenger chat widget
-  if (sourceType === 'conversation') return 'messenger';
-  return 'other';
+function toChannel(source: IntercomConversation['source']): 'messenger' | 'email' {
+  if (source?.subject && source.subject.trim() !== '') return 'email';
+  return 'messenger';
 }
 
 export function buildIntercomDailySnapshots(
-  convs: Array<{
-    id: string;
-    created_at: number;
-    ai_agent_participated?: boolean;
-    ai_agent?: { resolution_state?: string } | null;
-    conversation_rating?: { rating?: number | null } | null;
-    source?: { type?: string } | null;
-  }>,
+  convs: IntercomConversation[],
 ): RawSnapshot[] {
   interface ChAcc { involved: number; resolved: number; csatSum: number; csatCount: number }
   interface DayAcc {
@@ -148,7 +145,7 @@ export function buildIntercomDailySnapshots(
     const day = toISODay(c.created_at);
     const dayAcc = byDay.get(day) ?? { all: emptyAcc(), messenger: emptyAcc(), email: emptyAcc() };
 
-    const ch = toChannel(c.source?.type);
+    const ch = toChannel(c.source);
     const targets: ChAcc[] = [dayAcc.all];
     if (ch === 'messenger') targets.push(dayAcc.messenger);
     if (ch === 'email')     targets.push(dayAcc.email);
