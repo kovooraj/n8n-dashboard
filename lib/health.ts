@@ -1,47 +1,78 @@
 import type { N8nExecution, HealthStatus } from './types';
 
-const WINDOW_SIZE = 10;
-const DEGRADED_THRESHOLD = 0.40;
+const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
 
+/**
+ * Health status rules (newest-first execution list):
+ *
+ *  FAILING  — Most recent completed execution failed. The workflow is
+ *             currently broken with no successful recovery run since.
+ *
+ *  WARNING  — Most recent completed execution succeeded, but at least one
+ *             execution within the last 5 days failed. Transient error
+ *             that the workflow recovered from.
+ *
+ *  HEALTHY  — Every execution in the last 5 days was successful (or there
+ *             are no failures at all).
+ *
+ *  UNKNOWN  — No completed executions found to evaluate.
+ */
 export function deriveHealth(executions: N8nExecution[]): HealthStatus {
-  // Only count completed executions for health (exclude running/waiting)
+  const fiveDaysAgo = Date.now() - FIVE_DAYS_MS;
+
+  // Only consider completed executions (exclude running/waiting)
   const completed = executions.filter(
-    (e) => e.status === 'success' || e.status === 'error' || e.status === 'crashed'
+    (e) => e.status === 'success' || e.status === 'error' || e.status === 'crashed',
   );
 
-  const window = completed.slice(0, WINDOW_SIZE);
+  if (completed.length === 0) return 'unknown';
 
-  if (window.length === 0) return 'unknown';
+  // Narrow to executions within the last 5 days
+  const recent = completed.filter(
+    (e) => e.startedAt && new Date(e.startedAt).getTime() >= fiveDaysAgo,
+  );
 
-  const errorCount = window.filter(
-    (e) => e.status === 'error' || e.status === 'crashed'
-  ).length;
-  const failureRate = errorCount / window.length;
+  // Fall back to all completed executions if none fall in the window
+  // (e.g. a rarely-triggered workflow that last ran 6 days ago)
+  const window = recent.length > 0 ? recent : completed;
 
-  let health: HealthStatus;
-  if (failureRate === 0) {
-    health = 'healthy';
-  } else if (failureRate <= DEGRADED_THRESHOLD) {
-    health = 'degraded';
-  } else {
-    health = 'failing';
+  const mostRecent = window[0]; // executions are ordered newest → oldest
+  const mostRecentFailed =
+    mostRecent.status === 'error' || mostRecent.status === 'crashed';
+
+  if (mostRecentFailed) {
+    // Last run failed — currently broken
+    return 'failing';
   }
 
-  // Recency escalation: if the most recent completed execution failed, bump up one level
-  const mostRecent = window[0];
-  if (mostRecent.status === 'error' || mostRecent.status === 'crashed') {
-    if (health === 'healthy') health = 'degraded';
-    else if (health === 'degraded') health = 'failing';
+  const anyFailure = window.some(
+    (e) => e.status === 'error' || e.status === 'crashed',
+  );
+
+  if (anyFailure) {
+    // Recovered: last run succeeded but there was a failure in the window
+    return 'degraded'; // shown as "Warning" in the UI
   }
 
-  return health;
+  return 'healthy';
 }
 
 export function calcSuccessRate(executions: N8nExecution[]): number | null {
   const completed = executions.filter(
-    (e) => e.status === 'success' || e.status === 'error' || e.status === 'crashed'
+    (e) => e.status === 'success' || e.status === 'error' || e.status === 'crashed',
   );
   if (completed.length === 0) return null;
   const successes = completed.filter((e) => e.status === 'success').length;
   return Math.round((successes / completed.length) * 1000) / 10;
+}
+
+/** Returns true if the workflow had any failure in the last 24 hours. */
+export function hadFailureInLast24h(executions: N8nExecution[]): boolean {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  return executions.some(
+    (e) =>
+      (e.status === 'error' || e.status === 'crashed') &&
+      e.startedAt &&
+      new Date(e.startedAt).getTime() >= cutoff,
+  );
 }
