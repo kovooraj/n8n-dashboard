@@ -35,16 +35,25 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: '#4a4a4a',
 };
 
+type ChannelFilter = 'all' | 'messenger' | 'email';
+
+const CHANNEL_OPTIONS: { key: ChannelFilter; label: string; icon: string }[] = [
+  { key: 'all',       label: 'All Channels', icon: '⊕' },
+  { key: 'messenger', label: 'Messenger',    icon: '💬' },
+  { key: 'email',     label: 'Email',        icon: '✉' },
+];
+
 export function FINPage() {
   const [period, setPeriod] = useState<DashboardPeriod>('weekly');
+  const [channel, setChannel] = useState<ChannelFilter>('all');
   const [hideCompleted, setHideCompleted] = useState(true);
 
   const { data, loading, refreshing, stale, refresh } = useStaleData(
-    `fin-${period}`,
+    `fin-${period}-${channel}`,
     async (isRefresh) => {
       const force = isRefresh ? '&refresh=1' : '';
       const [finResult, cuResult] = await Promise.allSettled([
-        fetch(`/api/intercom/fin?period=${period}&_t=${Date.now()}${force}`, { cache: 'no-store' }).then((r) => r.json()),
+        fetch(`/api/intercom/fin?period=${period}&channel=${channel}&_t=${Date.now()}${force}`, { cache: 'no-store' }).then((r) => r.json()),
         fetch(`/api/clickup/projects?_t=${Date.now()}`, { cache: 'no-store' }).then((r) => r.json()),
       ]);
       return {
@@ -53,7 +62,7 @@ export function FINPage() {
         projects: cuResult.status === 'fulfilled' ? (cuResult.value.tasks ?? []) as ClickUpTask[] : [] as ClickUpTask[],
       };
     },
-    [period],
+    [period, channel],
   );
 
   const buckets = data?.buckets ?? [];
@@ -77,23 +86,60 @@ export function FINPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Period tabs + refresh */}
-      <div style={{ padding: '0 24px', flexShrink: 0, paddingTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <PeriodTabs active={period} onChange={setPeriod} />
-        <button
-          onClick={() => refresh()}
-          disabled={refreshing}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6, background: 'transparent',
-            border: '1px solid #1a2c1d', borderRadius: 6, padding: '5px 10px',
-            cursor: refreshing ? 'not-allowed' : 'pointer', color: '#6a8870',
-            fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em',
-            textTransform: 'uppercase', opacity: refreshing ? 0.5 : 1,
-          }}
-        >
-          <RefreshCw size={11} color="#6a8870" className={refreshing ? 'animate-spin' : ''} />
-          {refreshing ? 'Refreshing…' : 'Refresh'}
-        </button>
+      {/* Period tabs + channel filter + refresh */}
+      <div style={{ padding: '0 24px', flexShrink: 0, paddingTop: 16, borderBottom: '1px solid #1a2c1d', paddingBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <PeriodTabs active={period} onChange={setPeriod} />
+          <button
+            onClick={() => refresh()}
+            disabled={refreshing}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, background: 'transparent',
+              border: '1px solid #1a2c1d', borderRadius: 6, padding: '5px 10px',
+              cursor: refreshing ? 'not-allowed' : 'pointer', color: '#6a8870',
+              fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em',
+              textTransform: 'uppercase', opacity: refreshing ? 0.5 : 1,
+            }}
+          >
+            <RefreshCw size={11} color="#6a8870" className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+
+        {/* Channel filter pills */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10 }}>
+          <span style={{ fontSize: '0.6rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870', marginRight: 4 }}>Channel</span>
+          {CHANNEL_OPTIONS.map((opt) => {
+            const active = channel === opt.key;
+            return (
+              <button
+                key={opt.key}
+                onClick={() => setChannel(opt.key)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '4px 12px', borderRadius: 6, cursor: 'pointer',
+                  background: active ? '#1a2c1d' : 'transparent',
+                  color: active ? '#e4ede6' : '#8aad90',
+                  border: `1px solid ${active ? '#3dba62' : '#1a2c1d'}`,
+                  fontSize: '0.7rem', fontWeight: active ? 700 : 500,
+                  letterSpacing: '0.04em', transition: 'all 0.15s',
+                }}
+              >
+                <span style={{ fontSize: '0.75rem' }}>{opt.icon}</span>
+                {opt.label}
+              </button>
+            );
+          })}
+          {channel !== 'all' && (
+            <span style={{
+              fontSize: '0.6rem', color: '#d4912a', fontWeight: 600, letterSpacing: '0.08em',
+              padding: '2px 8px', background: 'rgba(212,145,42,0.1)', border: '1px solid rgba(212,145,42,0.3)',
+              borderRadius: 4, marginLeft: 4,
+            }}>
+              Filtered · {CHANNEL_OPTIONS.find(o => o.key === channel)?.label} only
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Scrollable content */}

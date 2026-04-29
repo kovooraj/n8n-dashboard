@@ -14,6 +14,8 @@ interface IntercomConversation {
   ai_agent_participated?: boolean;
   ai_agent?: { resolution_state?: string } | null;
   conversation_rating?: { rating?: number | null } | null;
+  /** source.type: "conversation" = Messenger/chat, "email" = Email, etc. */
+  source?: { type?: string } | null;
 }
 
 interface IntercomSearchResponse {
@@ -107,6 +109,20 @@ function toISODay(unixSec: number): string {
   return `${y}-${m}-${day}`;
 }
 
+/**
+ * Map Intercom source.type → our channel key.
+ * "conversation" = Intercom Messenger / chat widget
+ * "email"        = Email channel
+ * Everything else is counted only in the "all" totals.
+ */
+function toChannel(sourceType: string | undefined | null): 'messenger' | 'email' | 'other' {
+  if (!sourceType) return 'other';
+  if (sourceType === 'email') return 'email';
+  // "conversation" is the Intercom Messenger chat widget
+  if (sourceType === 'conversation') return 'messenger';
+  return 'other';
+}
+
 export function buildIntercomDailySnapshots(
   convs: Array<{
     id: string;
@@ -114,48 +130,73 @@ export function buildIntercomDailySnapshots(
     ai_agent_participated?: boolean;
     ai_agent?: { resolution_state?: string } | null;
     conversation_rating?: { rating?: number | null } | null;
+    source?: { type?: string } | null;
   }>,
 ): RawSnapshot[] {
-  interface Acc {
-    involved: number;
-    resolved: number;
-    csatSum: number;
-    csatCount: number;
+  interface ChAcc { involved: number; resolved: number; csatSum: number; csatCount: number }
+  interface DayAcc {
+    all: ChAcc;
+    messenger: ChAcc;
+    email: ChAcc;
   }
-  const byDay = new Map<string, Acc>();
+
+  function emptyAcc(): ChAcc { return { involved: 0, resolved: 0, csatSum: 0, csatCount: 0 }; }
+
+  const byDay = new Map<string, DayAcc>();
 
   for (const c of convs) {
     const day = toISODay(c.created_at);
-    const acc = byDay.get(day) ?? { involved: 0, resolved: 0, csatSum: 0, csatCount: 0 };
+    const dayAcc = byDay.get(day) ?? { all: emptyAcc(), messenger: emptyAcc(), email: emptyAcc() };
+
+    const ch = toChannel(c.source?.type);
+    const targets: ChAcc[] = [dayAcc.all];
+    if (ch === 'messenger') targets.push(dayAcc.messenger);
+    if (ch === 'email')     targets.push(dayAcc.email);
+
     if (c.ai_agent_participated) {
-      acc.involved += 1;
-      const state = c.ai_agent?.resolution_state;
-      if (state && RESOLVED_STATES.has(state)) acc.resolved += 1;
+      const isResolved = c.ai_agent?.resolution_state != null && RESOLVED_STATES.has(c.ai_agent.resolution_state);
+      for (const t of targets) {
+        t.involved += 1;
+        if (isResolved) t.resolved += 1;
+      }
     }
     const rating = c.conversation_rating?.rating;
     if (typeof rating === 'number' && rating > 0) {
-      acc.csatSum += rating;
-      acc.csatCount += 1;
+      for (const t of targets) {
+        t.csatSum += rating;
+        t.csatCount += 1;
+      }
     }
-    byDay.set(day, acc);
+
+    byDay.set(day, dayAcc);
+  }
+
+  function accToMetrics(acc: ChAcc, prefix: string): Record<string, number> {
+    const rate = acc.involved > 0 ? (acc.resolved / acc.involved) * 100 : 0;
+    const csat = acc.csatCount > 0 ? (acc.csatSum / acc.csatCount) * 20 : 0;
+    const hours = (acc.resolved * HANDLE_TIME_MIN_PER_RESOLUTION) / 60;
+    return {
+      [`${prefix}finInvolvement`]:  acc.involved,
+      [`${prefix}finResolved`]:     acc.resolved,
+      [`${prefix}finAutomationRate`]: rate,
+      [`${prefix}csat`]:            csat,
+      [`${prefix}hoursSaved`]:      hours,
+      [`${prefix}revenueImpact`]:   hours * REVENUE_PER_HOUR,
+    };
   }
 
   const out: RawSnapshot[] = [];
-  for (const [date, acc] of byDay) {
-    const automationRate = acc.involved > 0 ? (acc.resolved / acc.involved) * 100 : 0;
-    const csatPct = acc.csatCount > 0 ? (acc.csatSum / acc.csatCount) * 20 : 0;
-    const hoursSaved = (acc.resolved * HANDLE_TIME_MIN_PER_RESOLUTION) / 60;
+  for (const [date, dayAcc] of byDay) {
     out.push({
       date,
       metrics: {
-        finInvolvement: acc.involved,
-        finResolved: acc.resolved,
-        finAutomationRate: automationRate,
-        csat: csatPct,
-        finProcedureUses: 0,
+        // "all" (no prefix) — existing keys stay the same so old cached rows still work
+        ...accToMetrics(dayAcc.all, ''),
+        finProcedureUses:    0,
         activeFinProcedures: 0,
-        hoursSaved,
-        revenueImpact: hoursSaved * REVENUE_PER_HOUR,
+        // per-channel breakdowns (new — stored alongside existing keys)
+        ...accToMetrics(dayAcc.messenger, 'messenger_'),
+        ...accToMetrics(dayAcc.email,     'email_'),
       },
     });
   }

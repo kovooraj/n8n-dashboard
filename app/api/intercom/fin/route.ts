@@ -5,6 +5,8 @@ import { aggregate, type RawSnapshot, type Bucket, type Granularity } from '@/li
 import { fetchIntercomDailySnapshots } from '@/lib/intercom-fin';
 import { readSnapshots, writeSnapshots, todayUTC, dateRange } from '@/lib/db-snapshots';
 
+type ChannelFilter = 'all' | 'messenger' | 'email';
+
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
@@ -38,9 +40,34 @@ const getCachedDaily = unstable_cache(
   { revalidate: CACHE_REVALIDATE_SEC, tags: [CACHE_TAG] },
 );
 
+/**
+ * Remap per-channel metric keys so the existing `aggregate()` function
+ * sees the standard key names (finInvolvement, finResolved, etc.) regardless
+ * of which channel filter is active.
+ */
+function remapForChannel(snapshots: RawSnapshot[], channel: ChannelFilter): RawSnapshot[] {
+  if (channel === 'all') return snapshots;
+  const prefix = `${channel}_`; // e.g. "messenger_" or "email_"
+  return snapshots.map((s) => ({
+    ...s,
+    metrics: {
+      // Replace the standard keys with channel-specific values
+      finInvolvement:    s.metrics[`${prefix}finInvolvement`]    ?? 0,
+      finResolved:       s.metrics[`${prefix}finResolved`]       ?? 0,
+      finAutomationRate: s.metrics[`${prefix}finAutomationRate`] ?? 0,
+      csat:              s.metrics[`${prefix}csat`]              ?? 0,
+      hoursSaved:        s.metrics[`${prefix}hoursSaved`]        ?? 0,
+      revenueImpact:     s.metrics[`${prefix}revenueImpact`]     ?? 0,
+      finProcedureUses:    s.metrics.finProcedureUses    ?? 0,
+      activeFinProcedures: s.metrics.activeFinProcedures ?? 0,
+    },
+  }));
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const period = (searchParams.get('period') ?? 'weekly') as DashboardPeriod;
+  const period  = (searchParams.get('period')  ?? 'weekly') as DashboardPeriod;
+  const channel = (searchParams.get('channel') ?? 'all')    as ChannelFilter;
   const now = new Date();
 
   if (!process.env.INTERCOM_ACCESS_TOKEN) {
@@ -86,8 +113,9 @@ export async function GET(request: NextRequest) {
       daily = await getCachedDaily(days);
     }
 
-    const { buckets, totals, granularity } = aggregate(daily, period, AGG_RULES, now);
-    return mkResponse(buckets, totals, granularity);
+    const channelData = remapForChannel(daily, channel);
+    const { buckets, totals, granularity } = aggregate(channelData, period, AGG_RULES, now);
+    return mkResponse(buckets, totals, granularity, channel);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json(
@@ -133,7 +161,7 @@ function payloadFromBuckets(buckets: Bucket[]): BucketPayload[] {
   }));
 }
 
-function mkResponse(buckets: Bucket[], totals: Record<string, number>, granularity: Granularity) {
+function mkResponse(buckets: Bucket[], totals: Record<string, number>, granularity: Granularity, channel: ChannelFilter = 'all') {
   const bucketPayload = payloadFromBuckets(buckets);
   const snapshots = [...bucketPayload].reverse();
   const body = {
@@ -152,6 +180,7 @@ function mkResponse(buckets: Bucket[], totals: Record<string, number>, granulari
       revenueImpact: Number((totals.revenueImpact ?? 0).toFixed(2)),
     },
     granularity,
+    channel,
     mock: false,
     source: 'intercom',
   };
