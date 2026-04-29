@@ -91,6 +91,12 @@ export async function GET(request: NextRequest) {
 
     let daily: RawSnapshot[];
 
+    /** True if a snapshot row was stored before channel metrics were added. */
+    function lacksChannelData(snaps: RawSnapshot[]): boolean {
+      if (snaps.length === 0) return false;
+      return !snaps.some((s) => s.metrics.messenger_finInvolvement != null);
+    }
+
     if (!forceRefresh && process.env.NEXT_PUBLIC_SUPABASE_URL) {
       // Try DB-first: read all completed days from Supabase
       const dbSnaps = await readSnapshots('intercom-fin', fromDate, yesterdayDate).catch(() => [] as RawSnapshot[]);
@@ -98,19 +104,29 @@ export async function GET(request: NextRequest) {
       const neededDates = dateRange(fromDate, yesterdayDate);
       const missingDates = neededDates.filter((d) => !dbDates.has(d));
 
-      if (missingDates.length === 0) {
-        // All historical days in DB — only need today from live (1-day fetch, fast)
+      // Also treat old rows (no channel metrics) as a cache miss so they
+      // get re-fetched and rewritten with messenger_* / email_* keys.
+      const needsRebuild = missingDates.length > 0 || lacksChannelData(dbSnaps);
+
+      if (!needsRebuild) {
+        // All historical days in DB and channel-aware — only need today from live
         const todaySnaps = await fetchIntercomDailySnapshots(1).catch(() => [] as RawSnapshot[]);
         const todaySnap = todaySnaps.find((s) => s.date === today);
         daily = todaySnap ? [...dbSnaps, todaySnap] : dbSnaps;
       } else {
-        // DB missing some days — do full live fetch then persist to DB
+        // DB missing days or missing channel data — full live fetch then persist
         daily = await getCachedDaily(days);
         const completedSnaps = daily.filter((s) => s.date < today);
         writeSnapshots('intercom-fin', completedSnaps).catch(console.error);
       }
     } else {
+      // Force refresh — re-fetch from Intercom and write back to DB so
+      // subsequent non-refresh loads serve channel-aware rows.
       daily = await getCachedDaily(days);
+      if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+        const completedSnaps = daily.filter((s) => s.date < today);
+        writeSnapshots('intercom-fin', completedSnaps).catch(console.error);
+      }
     }
 
     const channelData = remapForChannel(daily, channel);
