@@ -5,15 +5,16 @@ const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
 /**
  * Health status rules (newest-first execution list):
  *
- *  FAILING  — Most recent completed execution failed. The workflow is
- *             currently broken with no successful recovery run since.
+ *  FAILING  — The most recent execution failed AND every execution since the
+ *             last successful run has also failed (i.e. no recovery yet).
+ *             Shown as RED "Failing".
  *
- *  WARNING  — Most recent completed execution succeeded, but at least one
- *             execution within the last 5 days failed. Transient error
- *             that the workflow recovered from.
+ *  DEGRADED — There was at least one failure in the 5-day window, but the
+ *             most recent execution succeeded — the workflow has recovered.
+ *             Shown as YELLOW "Warning".
  *
- *  HEALTHY  — Every execution in the last 5 days was successful (or there
- *             are no failures at all).
+ *  HEALTHY  — All executions in the last 5 days were successful.
+ *             Shown as GREEN "Healthy".
  *
  *  UNKNOWN  — No completed executions found to evaluate.
  */
@@ -33,7 +34,6 @@ export function deriveHealth(executions: N8nExecution[]): HealthStatus {
   );
 
   // Fall back to all completed executions if none fall in the window
-  // (e.g. a rarely-triggered workflow that last ran 6 days ago)
   const window = recent.length > 0 ? recent : completed;
 
   const mostRecent = window[0]; // executions are ordered newest → oldest
@@ -41,7 +41,7 @@ export function deriveHealth(executions: N8nExecution[]): HealthStatus {
     mostRecent.status === 'error' || mostRecent.status === 'crashed';
 
   if (mostRecentFailed) {
-    // Last run failed — currently broken
+    // Most recent failed → currently broken (Failing / RED)
     return 'failing';
   }
 
@@ -50,8 +50,8 @@ export function deriveHealth(executions: N8nExecution[]): HealthStatus {
   );
 
   if (anyFailure) {
-    // Recovered: last run succeeded but there was a failure in the window
-    return 'degraded'; // shown as "Warning" in the UI
+    // Most recent succeeded, but a failure exists in the window → recovered (Warning / YELLOW)
+    return 'degraded';
   }
 
   return 'healthy';

@@ -26,9 +26,9 @@ const HEALTH_COLOR: Record<string, string> = {
 };
 
 const HEALTH_LABEL: Record<string, string> = {
-  healthy: 'Active',
-  degraded: 'Warning',
-  failing: 'Failing',
+  healthy: 'Healthy',   // All executions in 5-day window successful
+  degraded: 'Warning',  // Had a failure but most recent run succeeded (recovered)
+  failing: 'Failing',   // Most recent execution(s) are failures, not yet recovered
   unknown: 'Unknown',
 };
 
@@ -451,50 +451,62 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
                 </div>
               ) : (
                 <>
-                  {/* Failing banner — most recent run is an error */}
-                  {failingWorkflows.length > 0 && (
-                    <div style={{
-                      background: 'rgba(224,88,88,0.08)', border: '1px solid rgba(224,88,88,0.25)',
-                      borderRadius: 8, padding: '10px 14px', marginBottom: 10,
-                      display: 'flex', alignItems: 'flex-start', gap: 10,
-                    }}>
-                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#e05858', flexShrink: 0, marginTop: 4 }} />
-                      <div>
-                        <span style={{ fontSize: '0.85rem', color: '#e05858', fontWeight: 600 }}>
-                          {failingWorkflows.length} workflow{failingWorkflows.length > 1 ? 's' : ''} currently failing —&nbsp;
-                        </span>
-                        <span style={{ fontSize: '0.85rem', color: '#e4ede6' }}>
-                          {failingWorkflows.map((w) => w.name).join(', ')}
-                        </span>
-                        <p style={{ fontSize: '0.72rem', color: '#8a6060', margin: '3px 0 0 0' }}>
-                          Last execution failed. No successful run since.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                  {/* 24h failures banner — any failure in last 24h (including recovered) */}
+                  {/* Unified 24h failure banner — ALL workflows that had any failure in the last 24h */}
                   {(() => {
-                    const recovered = recentlyFailedWorkflows.filter((w) => w.health !== 'failing');
-                    return recovered.length > 0 ? (
-                      <div style={{
-                        background: 'rgba(212,145,42,0.08)', border: '1px solid rgba(212,145,42,0.25)',
-                        borderRadius: 8, padding: '10px 14px', marginBottom: 14,
-                        display: 'flex', alignItems: 'flex-start', gap: 10,
-                      }}>
-                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#d4912a', flexShrink: 0, marginTop: 4 }} />
-                        <div>
-                          <span style={{ fontSize: '0.85rem', color: '#d4912a', fontWeight: 600 }}>
-                            {recovered.length} workflow{recovered.length > 1 ? 's' : ''} had failures in the last 24h —&nbsp;
-                          </span>
-                          <span style={{ fontSize: '0.85rem', color: '#e4ede6' }}>
-                            {recovered.map((w) => w.name).join(', ')}
-                          </span>
-                          <p style={{ fontSize: '0.72rem', color: '#8a7040', margin: '3px 0 0 0' }}>
-                            Most recent run succeeded — recovered, but monitor closely.
-                          </p>
-                        </div>
+                    // recentlyFailedWorkflows = had any failure in last 24h (regardless of current health)
+                    const allFailed24h = recentlyFailedWorkflows;
+                    if (allFailed24h.length === 0) return <div style={{ marginBottom: 14 }} />;
+
+                    // Split by severity for display ordering
+                    const stillFailing  = allFailed24h.filter((w) => w.health === 'failing');
+                    const nowRecovered  = allFailed24h.filter((w) => w.health !== 'failing');
+
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+                        {/* Currently still failing */}
+                        {stillFailing.length > 0 && (
+                          <div style={{
+                            background: 'rgba(224,88,88,0.08)', border: '1px solid rgba(224,88,88,0.3)',
+                            borderRadius: 8, padding: '10px 14px',
+                            display: 'flex', alignItems: 'flex-start', gap: 10,
+                          }}>
+                            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#e05858', flexShrink: 0, marginTop: 5 }} />
+                            <div style={{ flex: 1 }}>
+                              <span style={{ fontSize: '0.85rem', color: '#e05858', fontWeight: 700 }}>
+                                {stillFailing.length} workflow{stillFailing.length > 1 ? 's' : ''} currently failing:
+                              </span>
+                              <span style={{ fontSize: '0.85rem', color: '#e4ede6', marginLeft: 6 }}>
+                                {stillFailing.map((w) => w.name).join(', ')}
+                              </span>
+                              <p style={{ fontSize: '0.72rem', color: '#8a6060', margin: '3px 0 0 0' }}>
+                                Most recent execution failed — no successful recovery run yet.
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                        {/* Recovered — had a failure in last 24h but last run succeeded */}
+                        {nowRecovered.length > 0 && (
+                          <div style={{
+                            background: 'rgba(212,145,42,0.08)', border: '1px solid rgba(212,145,42,0.3)',
+                            borderRadius: 8, padding: '10px 14px',
+                            display: 'flex', alignItems: 'flex-start', gap: 10,
+                          }}>
+                            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#d4912a', flexShrink: 0, marginTop: 5 }} />
+                            <div style={{ flex: 1 }}>
+                              <span style={{ fontSize: '0.85rem', color: '#d4912a', fontWeight: 700 }}>
+                                {nowRecovered.length} workflow{nowRecovered.length > 1 ? 's' : ''} failed in the last 24h but recovered:
+                              </span>
+                              <span style={{ fontSize: '0.85rem', color: '#e4ede6', marginLeft: 6 }}>
+                                {nowRecovered.map((w) => w.name).join(', ')}
+                              </span>
+                              <p style={{ fontSize: '0.72rem', color: '#8a7040', margin: '3px 0 0 0' }}>
+                                Most recent run succeeded — monitor closely.
+                              </p>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    ) : (failingWorkflows.length === 0 ? <div style={{ marginBottom: 14 }} /> : null);
+                    );
                   })()}
                   <WorkflowsOverview workflows={workflows} />
                 </>
