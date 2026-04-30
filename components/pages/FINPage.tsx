@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import { useStaleData } from '@/lib/useStaleData';
@@ -159,25 +159,25 @@ export function FINPage() {
             label="Conversations"
             value={loading ? '—' : (totals?.finInvolvement ?? 0).toLocaleString()}
             showInfo
-            tooltip={`"Fin Involvement" from the Intercom FIN Notion database — count of customer conversations where Fin engaged. Summed across daily rows in the selected ${period} window.`}
+            tooltip={`Count of customer conversations where Intercom FIN engaged. Pulled daily from the Intercom Conversations API and stored in Supabase (intercom-fin). Summed across daily rows in the selected ${period} window.`}
           />
           <BenchKPICard
             label="Estimated Hours Saved"
             value={loading ? '—' : formatHours(totals?.hoursSaved ?? 0)}
             showInfo
-            tooltip={`Notion formula "Total Hours Saved" for FIN: resolved conversations × average human handle time saved. Summed over the ${period} window.`}
+            tooltip={`Resolved conversations x 5 min average human handle time saved per resolution, converted to hours. Formula: FIN-resolved x 5 min / 60. Summed over the ${period} window.`}
           />
           <BenchKPICard
             label="Estimated Revenue Impact"
             value={loading ? '—' : formatCurrency(totals?.revenueImpact ?? 0)}
             showInfo
-            tooltip={`Notion formula "Total Revenue Impact" for FIN: labour cost avoided on autonomously resolved chats + retention value from faster response. Summed over the ${period} window.`}
+            tooltip={`Hours saved x $20/hr loaded labour rate. Formula: (FIN-resolved x 5 min / 60) x $20. Summed over the ${period} window.`}
           />
           <BenchKPICard
             label="CSAT Score"
             value={loading ? '—' : `${totals?.csat ?? 0}%`}
             showInfo
-            tooltip={`Customer satisfaction rating averaged across daily Notion rows in the ${period} window. Source: Intercom's post-conversation CSAT pulled into the Notion FIN database.`}
+            tooltip={`Customer satisfaction score averaged across daily snapshot rows stored in Supabase. Source: Intercom post-conversation CSAT ratings, pulled nightly. Only days with actual ratings are included in the average.`}
           />
         </div>
 

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
@@ -296,26 +296,26 @@ export function OverviewPage() {
             label="Total Automation Triggers"
             value={loading ? '—' : totalTriggers.toLocaleString()}
             showInfo
-            tooltip={`Sum of events handled across all three platforms in the selected ${periodLabelFor(period)}. N8N: workflow executions from the live n8n API (weekly) or weekly Notion rollups (monthly+). FIN: Intercom FIN involvements from Notion. ElevenLabs: inbound calls from Notion. Formula: n8nTriggers + finInvolvement + elCalls.`}
+            tooltip={`Sum of events handled across all three platforms in the selected ${periodLabelFor(period)}. N8N: workflow executions from the live n8n API (weekly) or Supabase daily snapshots (monthly+). FIN: Intercom FIN conversation involvements from Supabase. ElevenLabs: inbound call counts from Supabase. Formula: n8nTriggers + finInvolvement + elCalls.`}
             subBadge={<span style={{ fontSize: '0.65rem', color: '#6a8870' }}>N8N · FIN · Calls</span>}
           />
           <BenchKPICard
             label="Estimated Hours Saved"
             value={loading ? '—' : formatHours(totalHours)}
             showInfo
-            tooltip={`Business-impact estimate rolled up from each platform's Notion record. Derived from per-tool formulas (e.g. calls × avg handle time saved, triggers × manual-equivalent time). Summed across N8N + FIN + ElevenLabs for the ${periodLabelFor(period)}.`}
+            tooltip={`Hours saved calculated per platform from actual execution data stored in Supabase. N8N: successful executions x 10 min / 60. FIN: FIN-resolved conversations x 5 min / 60. ElevenLabs: AI-handled calls x avg call duration / 3600. Summed across all three platforms for the ${periodLabelFor(period)}.`}
           />
           <BenchKPICard
             label="Estimated Revenue Impact"
             value={loading ? '—' : formatCurrency(totalRevenue)}
             showInfo
-            tooltip={`Business-impact estimate rolled up from each platform's Notion "Total Revenue Impact" formula. Accounts for labour cost avoidance + revenue protected/unlocked. Sum across all three platforms for the ${periodLabelFor(period)}.`}
+            tooltip={`Labour cost avoided based on hours saved x $20/hr staff rate across all platforms. Each platform computes hours from its own execution data stored in Supabase. Sum across N8N + FIN + ElevenLabs for the ${periodLabelFor(period)}.`}
           />
           <BenchKPICard
             label="Automation Active"
             value={loading ? '—' : totalActive}
             showInfo
-            tooltip={`Live count of active automations right now. N8N: queried from the n8n API (all workflows with active=true). FIN: "Active Fin Procedures" from the latest Notion row. ElevenLabs: "Active ElevenLabs Agents" from the latest Notion row. Health dots show live n8n state: Healthy (all recent runs OK), Degraded (some failures), Failing (recent failure rate >40% or last run failed).`}
+            tooltip={`Live count of active automations right now. N8N: all workflows with active=true queried directly from the n8n API. FIN: active Fin procedures from the latest Intercom snapshot in Supabase. ElevenLabs: active agents from the latest ElevenLabs snapshot in Supabase. Health dots show live n8n state: Healthy (all recent runs OK), Warning (recovered), Failing (most recent run failed).`}
             subBadge={
               <span style={{ fontSize: '0.65rem', color: '#6a8870', display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                 <span>{n8nActive} N8N</span>

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
@@ -402,24 +402,23 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
                   value={loading ? '—' : (totals?.totalTriggers ?? 0).toLocaleString()}
                   showInfo
                   tooltip={period === 'weekly'
-                    ? `Live count: every n8n execution started in the last 7 days across every active workflow. Pulled from the n8n Executions API and bucketed per day.`
-                    : `Sum of "Total Triggers" from weekly Notion rollup rows that fall inside the selected ${period} window.`}
+                    ? `Live count from the n8n Executions API — every execution started across all active workflows in the last 7 days, bucketed per day.`
+                    : `Sum of daily execution counts stored in Supabase (n8n-history) across the selected ${period} window. Updated nightly at 2 AM UTC by the daily sync cron.`}
                 />
                 <BenchKPICard
                   label="Estimated Hours Saved"
                   value={loading ? '—' : formatHours(totals?.hoursSaved ?? 0)}
                   showInfo
-                  tooltip={`Derived from Notion's "Total Hours Saved" formula (manual-equivalent effort × triggers). ${period === 'weekly' ? 'For weekly, uses the latest Notion weekly row (live executions don\u2019t carry business-impact estimates).' : `Summed across Notion rows in the ${period} window.`}`}
+                  tooltip={`Calculated from successful executions x 10 min average manual effort saved per run, converted to hours. Formula: successful triggers x 10 min / 60. Summed across the ${period} window.`}
                 />
                 <BenchKPICard
                   label="Estimated Revenue Impact"
                   value={loading ? '—' : formatCurrency(totals?.revenueImpact ?? 0)}
                   showInfo
-                  tooltip={`Derived from Notion's "Total Revenue Impact" formula. Accounts for labour cost avoidance + revenue protected/unlocked per workflow. ${period === 'weekly' ? 'For weekly, uses the latest Notion weekly row.' : `Summed across Notion rows in the ${period} window.`}`}
+                  tooltip={`Labour cost avoided based on hours saved x $20/hr staff rate. Formula: (successful triggers x 10 min / 60) x $20. Summed across the ${period} window.`}
                 />
                 <BenchKPICard
                   label="Workflows Active"
-                  // Prefer live workflow count (reflects actual reality) over Notion snapshot
                   value={liveLoading ? '—' : (workflows.length || totals?.activeWorkflows || 0)}
                   showInfo
                   tooltip={`Live count from the n8n API — every workflow with active=true right now. Health: Healthy = all runs successful in the last 5 days; Warning = recovered (last run OK but there were failures in the last 5 days); Failing = most recent run failed.`}

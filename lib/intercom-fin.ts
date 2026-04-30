@@ -168,17 +168,19 @@ export function buildIntercomDailySnapshots(
     byDay.set(day, dayAcc);
   }
 
-  function accToMetrics(acc: ChAcc, prefix: string): Record<string, number> {
+  function accToMetrics(acc: ChAcc, prefix: string): Record<string, number | null> {
     const rate = acc.involved > 0 ? (acc.resolved / acc.involved) * 100 : 0;
-    const csat = acc.csatCount > 0 ? (acc.csatSum / acc.csatCount) * 20 : 0;
+    // null when no ratings — aggregate's avg filter excludes nulls so zero-days
+    // don't drag down the channel-specific average.
+    const csat = acc.csatCount > 0 ? (acc.csatSum / acc.csatCount) * 20 : null;
     const hours = (acc.resolved * HANDLE_TIME_MIN_PER_RESOLUTION) / 60;
     return {
-      [`${prefix}finInvolvement`]:  acc.involved,
-      [`${prefix}finResolved`]:     acc.resolved,
+      [`${prefix}finInvolvement`]:    acc.involved,
+      [`${prefix}finResolved`]:       acc.resolved,
       [`${prefix}finAutomationRate`]: rate,
-      [`${prefix}csat`]:            csat,
-      [`${prefix}hoursSaved`]:      hours,
-      [`${prefix}revenueImpact`]:   hours * REVENUE_PER_HOUR,
+      [`${prefix}csat`]:              csat,
+      [`${prefix}hoursSaved`]:        hours,
+      [`${prefix}revenueImpact`]:     hours * REVENUE_PER_HOUR,
     };
   }
 

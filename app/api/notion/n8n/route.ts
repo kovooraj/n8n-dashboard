@@ -8,47 +8,86 @@ import {
   type Granularity,
 } from '@/lib/aggregate';
 import { fetchAllWorkflows, fetchExecutionsBatch } from '@/lib/n8n';
+import { readSnapshots, todayUTC } from '@/lib/db-snapshots';
 
 function pad(n: number): string { return n < 10 ? `0${n}` : String(n); }
 function toISO(d: Date): string {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
-// Never cache this route — period parameter drives fresh reads every request
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-const DB_ID = '88be8990-0676-4789-a5ca-0fdbff431c46';
+// Business-impact constants — same baseline as FIN / ElevenLabs
+// 10 min of manual effort saved per successful n8n execution, $20/hr labour cost
+const MINUTES_PER_SUCCESS = 10;
+const REVENUE_PER_HOUR    = 20;
 
-// Metric aggregation rules for N8N (Notion path, monthly+)
+function calcHours(successes: number): number {
+  return (successes * MINUTES_PER_SUCCESS) / 60;
+}
+function calcRevenue(hours: number): number {
+  return hours * REVENUE_PER_HOUR;
+}
+
 const AGG_RULES = {
-  totalTriggers: 'sum',
-  failedTriggers: 'sum',
-  newWorkflows: 'sum',
-  hoursSaved: 'sum',
-  revenueImpact: 'sum',
-  activeWorkflows: 'last', // running count — take most-recent-in-bucket
+  totalTriggers:   'sum',
+  failedTriggers:  'sum',
+  newWorkflows:    'sum',
+  hoursSaved:      'sum',
+  revenueImpact:   'sum',
+  activeWorkflows: 'last',
 } as const;
 
-// Mock raw snapshots for when no Notion token is available
-function mockSnapshots(now: Date = new Date()): RawSnapshot[] {
-  const out: RawSnapshot[] = [];
-  for (let i = 0; i < 12; i++) {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i * 7));
-    const iso = toISO(d);
-    out.push({
-      date: iso,
-      metrics: {
-        totalTriggers: 1550 - i * 45,
-        failedTriggers: i % 3,
-        activeWorkflows: 22 - (i % 4),
-        newWorkflows: i % 2,
-        hoursSaved: 43 - i,
-        revenueImpact: 2100 - i * 60,
-      },
-    });
+function lookbackDays(period: DashboardPeriod): number {
+  switch (period) {
+    case 'weekly':    return 10;
+    case 'monthly':   return 35;
+    case 'quarterly': return 100;
+    case 'annually':  return 380;
   }
-  return out;
+}
+
+/**
+ * Read n8n execution history from Supabase and normalise to the shape
+ * aggregate() expects.
+ *
+ * The daily cron stored rows with either:
+ *   old keys → { total, success, error }
+ *   new keys → { totalTriggers, failedTriggers, successTriggers, hoursSaved, revenueImpact }
+ * Both are handled below so historical rows still work.
+ */
+async function loadSupabaseRaw(period: DashboardPeriod, now: Date): Promise<RawSnapshot[]> {
+  const days = lookbackDays(period);
+  const fromDate = new Date(now.getTime() - days * 86400_000).toISOString().slice(0, 10);
+  const toDate = toISO(now);
+
+  const rows = await readSnapshots('n8n-history', fromDate, toDate);
+
+  return rows.map((r) => {
+    const m = r.metrics as Record<string, number>;
+
+    // Support both old and new field names
+    const total   = m.totalTriggers   ?? m.total   ?? 0;
+    const failed  = m.failedTriggers  ?? m.error   ?? 0;
+    const success = m.successTriggers ?? m.success  ?? Math.max(0, total - failed);
+
+    // Use pre-calculated values if stored, otherwise derive from counts
+    const hours   = m.hoursSaved      ?? calcHours(success);
+    const revenue = m.revenueImpact   ?? calcRevenue(hours);
+
+    return {
+      date: r.date,
+      metrics: {
+        totalTriggers:   total,
+        failedTriggers:  failed,
+        hoursSaved:      hours,
+        revenueImpact:   revenue,
+        activeWorkflows: 0,   // overridden by live count in GET
+        newWorkflows:    0,
+      },
+    } as RawSnapshot;
+  });
 }
 
 interface BucketPayload {
@@ -74,88 +113,33 @@ function payloadFromBuckets(buckets: Bucket[]): BucketPayload[] {
     start: b.start,
     end: b.end,
     count: b.count,
-    totalTriggers: Math.round(b.metrics.totalTriggers ?? 0),
-    failedTriggers: Math.round(b.metrics.failedTriggers ?? 0),
+    totalTriggers:   Math.round(b.metrics.totalTriggers   ?? 0),
+    failedTriggers:  Math.round(b.metrics.failedTriggers  ?? 0),
     activeWorkflows: Math.round(b.metrics.activeWorkflows ?? 0),
-    newWorkflows: Math.round(b.metrics.newWorkflows ?? 0),
-    hoursSaved: b.metrics.hoursSaved ?? 0,
-    revenueImpact: b.metrics.revenueImpact ?? 0,
+    newWorkflows:    Math.round(b.metrics.newWorkflows     ?? 0),
+    hoursSaved:      Math.round(b.metrics.hoursSaved       ?? 0),
+    revenueImpact:   Math.round(b.metrics.revenueImpact   ?? 0),
   }));
 }
 
 /**
- * Read the most recent Notion weekly row to recover hoursSaved / revenueImpact
- * business-impact estimates for the live-weekly path (those aren't derivable
- * from n8n executions). Returns nulls if Notion isn't reachable.
- */
-async function loadLatestNotionWeekly(): Promise<{ hoursSaved: number; revenueImpact: number } | null> {
-  if (!process.env.NOTION_TOKEN) return null;
-  try {
-    const { queryDatabase, getFormula, getDate } = await import('@/lib/notion');
-    const rows = await queryDatabase(
-      DB_ID,
-      undefined,
-      [{ property: 'Week Start Date', direction: 'descending' }],
-    );
-    for (const row of rows) {
-      const date = getDate(row, 'Week Start Date');
-      if (!date) continue;
-      return {
-        hoursSaved: getFormula(row, 'Total Hours Saved') ?? 0,
-        revenueImpact: getFormula(row, 'Total Revenue Impact') ?? 0,
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-async function loadNotionRaw(): Promise<RawSnapshot[]> {
-  const { queryDatabase, getNumber, getFormula, getDate } = await import('@/lib/notion');
-  const rows = await queryDatabase(
-    DB_ID,
-    undefined,
-    [{ property: 'Week Start Date', direction: 'descending' }],
-  );
-
-  return rows
-    .map((row) => {
-      const date = getDate(row, 'Week Start Date');
-      if (!date) return null;
-      return {
-        date,
-        metrics: {
-          totalTriggers: getNumber(row, 'Total Triggers'),
-          failedTriggers: getNumber(row, 'Total Failed Triggers'),
-          activeWorkflows: getNumber(row, 'Total Active Workflows'),
-          newWorkflows: getNumber(row, 'New Workflows Launched'),
-          hoursSaved: getFormula(row, 'Total Hours Saved'),
-          revenueImpact: getFormula(row, 'Total Revenue Impact'),
-        },
-      } as RawSnapshot;
-    })
-    .filter((r): r is RawSnapshot => r !== null);
-}
-
-/**
- * LIVE weekly path: pull current workflow list + recent executions from n8n,
- * bucket executions into the last 7 days. `activeWorkflows` = true count from
- * live API (not Notion's snapshot number). Business-impact estimates fall back
- * to the latest Notion weekly row since they're not in execution data.
+ * LIVE weekly path — pulls fresh execution counts directly from the n8n API
+ * and buckets them into 7 daily slots.
+ * Business-impact metrics are derived from actual success counts
+ * (no external data source needed).
  */
 async function buildWeeklyLive(now: Date): Promise<Response> {
   const allWorkflows = await fetchAllWorkflows();
   const activeWorkflows = allWorkflows.filter((w) => w.active);
   const activeCount = activeWorkflows.length;
 
-  // 100 executions per workflow covers busy 7-day windows without overloading n8n
   const execMap = await fetchExecutionsBatch(activeWorkflows.map((w) => w.id), 100);
 
   // 7 daily bucket shells
   const range = buildBucketRange('weekly', now);
   const bucketMap = new Map<string, BucketPayload>();
   const orderedBuckets: BucketPayload[] = [];
+
   for (const b of range.buckets) {
     const payload: BucketPayload = {
       id: toISO(b.start),
@@ -180,22 +164,29 @@ async function buildWeeklyLive(now: Date): Promise<Response> {
   rangeEnd.setUTCHours(23, 59, 59, 999);
 
   let totalTriggers = 0;
+  let totalSuccess  = 0;
   let failedTriggers = 0;
+
   for (const execs of execMap.values()) {
     for (const exec of execs as N8nExecution[]) {
       if (!exec.startedAt) continue;
       const d = new Date(exec.startedAt);
       if (isNaN(d.getTime())) continue;
       if (d < rangeStart || d > rangeEnd) continue;
+
       const dayKey = toISO(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())));
       const bucket = bucketMap.get(dayKey);
       if (!bucket) continue;
-      bucket.count += 1;
+
+      bucket.count         += 1;
       bucket.totalTriggers += 1;
-      totalTriggers += 1;
-      if (exec.status === 'error' || exec.status === 'crashed') {
+      totalTriggers        += 1;
+
+      if (exec.status === 'success') {
+        totalSuccess += 1;
+      } else if (exec.status === 'error' || exec.status === 'crashed') {
         bucket.failedTriggers += 1;
-        failedTriggers += 1;
+        failedTriggers        += 1;
       }
     }
   }
@@ -213,33 +204,35 @@ async function buildWeeklyLive(now: Date): Promise<Response> {
     }
   }
 
-  // Business-impact estimates: pull latest Notion weekly row, distribute by trigger share
-  const latest = await loadLatestNotionWeekly();
-  const hoursSaved = latest?.hoursSaved ?? 0;
-  const revenueImpact = latest?.revenueImpact ?? 0;
-  if (totalTriggers > 0 && (hoursSaved > 0 || revenueImpact > 0)) {
+  // Distribute business-impact metrics proportionally to each day's trigger share
+  const totalHours   = calcHours(totalSuccess);
+  const totalRevenue = calcRevenue(totalHours);
+
+  if (totalTriggers > 0 && totalHours > 0) {
     for (const b of orderedBuckets) {
-      const weight = b.totalTriggers / totalTriggers;
-      b.hoursSaved = Math.round(hoursSaved * weight * 10) / 10;
-      b.revenueImpact = Math.round(revenueImpact * weight);
+      const weight    = b.totalTriggers / totalTriggers;
+      const daySuccess = b.totalTriggers - b.failedTriggers;
+      b.hoursSaved    = Math.round(calcHours(daySuccess));
+      b.revenueImpact = Math.round(calcRevenue(b.hoursSaved));
     }
   }
 
   const body = {
     snapshots: [...orderedBuckets].reverse(),
-    buckets: orderedBuckets,
+    buckets:   orderedBuckets,
     totals: {
       totalTriggers,
       failedTriggers,
       activeWorkflows: activeCount,
       newWorkflows,
-      hoursSaved,
-      revenueImpact,
+      hoursSaved:    Math.round(totalHours),
+      revenueImpact: Math.round(totalRevenue),
     },
     granularity: 'day' as Granularity,
     mock: false,
     source: 'live-n8n',
   };
+
   return NextResponse.json(body, {
     headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
   });
@@ -250,50 +243,51 @@ export async function GET(request: NextRequest) {
   const period = (searchParams.get('period') ?? 'weekly') as DashboardPeriod;
   const now = new Date();
 
-  // ── LIVE PATH: weekly always uses live n8n execution data ──
+  // ── WEEKLY: always use live n8n execution data (fresh, fast) ──
   if (period === 'weekly') {
     try {
       return await buildWeeklyLive(now);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      // Fall back to Notion/mock if live fetch fails
-      const token = process.env.NOTION_TOKEN;
-      if (token) {
+      // Fall back to Supabase historical data if live fetch fails
+      if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
         try {
-          const raw = await loadNotionRaw();
-          return buildFromRaw(raw, period, now, false, `live-fetch-failed: ${message}`, null);
-        } catch {
-          /* fall through */
-        }
+          const raw = await loadSupabaseRaw(period, now);
+          if (raw.length > 0) return buildFromRaw(raw, period, now, false, `live-failed: ${message}`, null);
+        } catch { /* fall through */ }
       }
-      const raw = mockSnapshots(now);
-      return buildFromRaw(raw, period, now, true, `live-fetch-failed: ${message}`, null);
+      return NextResponse.json(
+        { error: `n8n-error: ${message}` },
+        { status: 502, headers: { 'Cache-Control': 'no-store' } },
+      );
     }
   }
 
-  // ── NOTION PATH: monthly / quarterly / annually ──
-  const token = process.env.NOTION_TOKEN;
-  if (!token) {
-    const raw = mockSnapshots(now);
-    return buildFromRaw(raw, period, now, true, undefined, null);
+  // ── MONTHLY / QUARTERLY / ANNUALLY: read from Supabase daily snapshots ──
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    return NextResponse.json(
+      { error: 'NEXT_PUBLIC_SUPABASE_URL not set' },
+      { status: 500, headers: { 'Cache-Control': 'no-store' } },
+    );
   }
 
   try {
-    const raw = await loadNotionRaw();
-    // Attach live active workflow count so KPI cards reflect reality even on
-    // non-weekly periods (user: "always reflect reality")
+    const raw = await loadSupabaseRaw(period, now);
+
+    // Attach live active workflow count so the KPI card always reflects reality
     let liveActive: number | null = null;
     try {
       const wfs = await fetchAllWorkflows();
       liveActive = wfs.filter((w) => w.active).length;
-    } catch {
-      liveActive = null;
-    }
+    } catch { /* non-fatal */ }
+
     return buildFromRaw(raw, period, now, false, undefined, liveActive);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    const raw = mockSnapshots(now);
-    return buildFromRaw(raw, period, now, true, message, null);
+    return NextResponse.json(
+      { error: `n8n-error: ${message}` },
+      { status: 502, headers: { 'Cache-Control': 'no-store' } },
+    );
   }
 }
 
@@ -318,26 +312,25 @@ function mkResponse(
   liveActive: number | null,
 ) {
   const bucketPayload = payloadFromBuckets(buckets);
-  // Prefer live active workflow count over Notion's snapshot number
-  const activeWorkflowsTotal =
-    liveActive != null ? liveActive : Math.round(totals.activeWorkflows ?? 0);
-  const snapshots = [...bucketPayload].reverse();
+  const activeWorkflowsTotal = liveActive != null ? liveActive : Math.round(totals.activeWorkflows ?? 0);
+
   const body = {
-    snapshots,
-    buckets: bucketPayload,
+    snapshots: [...bucketPayload].reverse(),
+    buckets:   bucketPayload,
     totals: {
-      totalTriggers: Math.round(totals.totalTriggers ?? 0),
-      failedTriggers: Math.round(totals.failedTriggers ?? 0),
+      totalTriggers:   Math.round(totals.totalTriggers   ?? 0),
+      failedTriggers:  Math.round(totals.failedTriggers  ?? 0),
       activeWorkflows: activeWorkflowsTotal,
-      newWorkflows: Math.round(totals.newWorkflows ?? 0),
-      hoursSaved: totals.hoursSaved ?? 0,
-      revenueImpact: totals.revenueImpact ?? 0,
+      newWorkflows:    Math.round(totals.newWorkflows     ?? 0),
+      hoursSaved:      Math.round(totals.hoursSaved       ?? 0),
+      revenueImpact:   Math.round(totals.revenueImpact   ?? 0),
     },
     granularity,
     mock,
-    source: liveActive != null ? 'notion+live-active' : 'notion',
+    source: liveActive != null ? 'supabase+live-active' : 'supabase',
     ...(error ? { error } : {}),
   };
+
   return NextResponse.json(body, {
     headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
   });

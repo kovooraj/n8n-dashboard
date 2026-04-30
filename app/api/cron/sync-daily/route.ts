@@ -24,13 +24,17 @@ export const dynamic = 'force-dynamic';
 
 // ── n8n history ──────────────────────────────────────────────────────────────
 
+// Business-impact constants (keep in sync with /api/notion/n8n/route.ts)
+const N8N_MINUTES_PER_SUCCESS = 10;
+const N8N_REVENUE_PER_HOUR    = 20;
+
 async function fetchN8nDailySnapshot(targetDate: string): Promise<RawSnapshot[]> {
   const since = new Date(targetDate + 'T00:00:00Z');
   const workflows = await fetchAllWorkflows();
   const activeIds = workflows.filter((w) => w.active).map((w) => w.id);
 
   const BATCH = 5;
-  let total = 0, success = 0, error = 0;
+  let totalTriggers = 0, successTriggers = 0, failedTriggers = 0;
 
   for (let i = 0; i < activeIds.length; i += BATCH) {
     const batch = activeIds.slice(i, i + BATCH);
@@ -41,14 +45,20 @@ async function fetchN8nDailySnapshot(targetDate: string): Promise<RawSnapshot[]>
       for (const e of execs) {
         const day = e.startedAt ? new Date(e.startedAt).toISOString().slice(0, 10) : null;
         if (day !== targetDate) continue;
-        total += 1;
-        if (e.status === 'success') success += 1;
-        else if (e.status === 'error' || e.status === 'crashed') error += 1;
+        totalTriggers += 1;
+        if (e.status === 'success') successTriggers += 1;
+        else if (e.status === 'error' || e.status === 'crashed') failedTriggers += 1;
       }
     }
   }
 
-  return [{ date: targetDate, metrics: { total, success, error } }];
+  const hoursSaved    = (successTriggers * N8N_MINUTES_PER_SUCCESS) / 60;
+  const revenueImpact = hoursSaved * N8N_REVENUE_PER_HOUR;
+
+  return [{
+    date: targetDate,
+    metrics: { totalTriggers, successTriggers, failedTriggers, hoursSaved, revenueImpact },
+  }];
 }
 
 // ── Anthropic workspace usage ─────────────────────────────────────────────────
