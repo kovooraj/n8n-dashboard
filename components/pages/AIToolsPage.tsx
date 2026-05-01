@@ -46,6 +46,30 @@ interface ClaudePayload {
   source: 'claude-ai-internal';
 }
 
+// ── ChatGPT types (mirrors lib/chatgpt-usage.ts) ─────────────────────────────
+
+interface ChatGPTUser {
+  name: string;
+  email: string;
+  messages: number;
+  gptMessages: number;
+  toolMessages: number;
+  connectorMessages: number;
+  projectMessages: number;
+  hoursSaved: number;
+  revenueImpact: number;
+  seatType: string;
+}
+
+interface ChatGPTPayload {
+  users: ChatGPTUser[];
+  stats: { claimedSeats: number; activeUsers: number; purchasedSeats: number; totalMessages: number };
+  totals: { activeUsers: number; totalMessages: number; hoursSaved: number; revenueImpact: number };
+  window: { startDate: string; endDate: string };
+  source: 'chatgpt-enterprise';
+  error?: string;
+}
+
 interface SupabaseProject {
   id: string;
   name: string;
@@ -107,12 +131,12 @@ interface ToolDef {
   connectHint?: string;
 }
 
-const TOOLS: ToolDef[] = [
-  { key: 'claude',     label: 'Claude',     color: '#d4912a', connected: true },
-  { key: 'supabase',   label: 'Supabase',   color: '#3ecf8e', connected: true },
-  { key: 'chatgpt',    label: 'ChatGPT',    color: '#10a37f', connected: false, connectHint: 'Set OPENAI_ADMIN_KEY in Vercel env vars to see per-user ChatGPT usage.' },
-  { key: 'gemini',     label: 'Gemini',     color: '#4285f4', connected: false, connectHint: 'Google Workspace usage reporting coming soon.' },
-  { key: 'perplexity', label: 'Perplexity', color: '#9b6dff', connected: false, connectHint: 'Perplexity Enterprise admin API coming soon.' },
+const STATIC_TOOLS: Omit<ToolDef, 'connected'>[] = [
+  { key: 'claude',     label: 'Claude',     color: '#d4912a' },
+  { key: 'supabase',   label: 'Supabase',   color: '#3ecf8e' },
+  { key: 'chatgpt',    label: 'ChatGPT',    color: '#10a37f', connectHint: 'Set CHATGPT_SESSION_TOKEN and CHATGPT_ACCOUNT_ID in Vercel env vars to enable per-user ChatGPT Enterprise usage tracking.' },
+  { key: 'gemini',     label: 'Gemini',     color: '#4285f4', connectHint: 'Google Workspace usage reporting coming soon.' },
+  { key: 'perplexity', label: 'Perplexity', color: '#9b6dff', connectHint: 'Perplexity does not expose a usage or billing API — all spend data is only accessible via the console dashboard. Check console.perplexity.ai to review API usage manually.' },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -183,6 +207,25 @@ export function AIToolsPage() {
       setTimeout(() => setRosterSaveStatus('idle'), 3000);
     }
   }, [rosterEdits]);
+
+  // ── ChatGPT data ────────────────────────────────────────────────────────────
+  const { data: chatgptData, loading: chatgptLoading, refresh: refreshChatGPT } = useStaleData<ChatGPTPayload>(
+    `chatgpt-usage-${period}`,
+    async (isRefresh) => {
+      const force = isRefresh ? '&refresh=1' : '';
+      const resp = await fetch(`/api/chatgpt/usage?period=${period}&_t=${Date.now()}${force}`, { cache: 'no-store' });
+      const body = await resp.json();
+      if (!resp.ok) throw new Error(body?.error ?? `HTTP ${resp.status}`);
+      return body as ChatGPTPayload;
+    },
+    [period],
+  );
+
+  const chatgptConnected  = !chatgptLoading && !!chatgptData && !chatgptData.error;
+  const chatgptTotals     = chatgptConnected ? chatgptData!.totals : null;
+  const chatgptUsers      = chatgptConnected ? (chatgptData!.users ?? []) : [];
+  const chatgptStats      = chatgptConnected ? chatgptData!.stats : null;
+  const chatgptError      = chatgptData?.error ?? null;
 
   // ── Claude data ─────────────────────────────────────────────────────────────
   const { data: claudeData, loading: claudeLoading, refreshing, refresh: refreshClaude } = useStaleData<ClaudePayload & { error?: string }>(
@@ -284,17 +327,27 @@ export function AIToolsPage() {
     }));
   }, [supabaseData]);
 
+  // ── Dynamic TOOLS array (connected state computed from live data) ────────────
+  const TOOLS: ToolDef[] = useMemo(() => STATIC_TOOLS.map((t) => ({
+    ...t,
+    connected: t.key === 'claude'   ? claudeConnected
+             : t.key === 'chatgpt'  ? chatgptConnected
+             : t.key === 'supabase' ? true
+             : false,
+  })), [claudeConnected, chatgptConnected]);
+
   // ── All-tools aggregations ──────────────────────────────────────────────────
   const allToolsData = useMemo(() => [
-    { key: 'claude' as ToolFilter,     label: 'Claude',     color: '#d4912a', connected: claudeConnected, spendUsd: claudeSpend, activeUsers: claudeActive, hoursSaved: claudeHours, error: claudeError, loading: claudeLoading },
-    { key: 'supabase' as ToolFilter,   label: 'Supabase',   color: '#3ecf8e', connected: true,            spendUsd: 0,           activeUsers: supabaseData?.snapshotTotals?.activeSources ?? 0, hoursSaved: 0, error: null, loading: supabaseLoading },
-    { key: 'chatgpt' as ToolFilter,    label: 'ChatGPT',    color: '#10a37f', connected: false,           spendUsd: 0,           activeUsers: 0, hoursSaved: 0, error: null, loading: false },
-    { key: 'gemini' as ToolFilter,     label: 'Gemini',     color: '#4285f4', connected: false,           spendUsd: 0,           activeUsers: 0, hoursSaved: 0, error: null, loading: false },
-    { key: 'perplexity' as ToolFilter, label: 'Perplexity', color: '#9b6dff', connected: false,           spendUsd: 0,           activeUsers: 0, hoursSaved: 0, error: null, loading: false },
-  ], [claudeConnected, claudeSpend, claudeActive, claudeHours, claudeError, claudeLoading, supabaseData, supabaseLoading]);
+    { key: 'claude' as ToolFilter,     label: 'Claude',     color: '#d4912a', connected: claudeConnected,  spendUsd: claudeSpend,                          activeUsers: claudeActive,                                        hoursSaved: claudeHours,                    error: claudeError,  loading: claudeLoading },
+    { key: 'supabase' as ToolFilter,   label: 'Supabase',   color: '#3ecf8e', connected: true,             spendUsd: 0,                                    activeUsers: supabaseData?.snapshotTotals?.activeSources ?? 0,    hoursSaved: 0,                              error: null,         loading: supabaseLoading },
+    { key: 'chatgpt' as ToolFilter,    label: 'ChatGPT',    color: '#10a37f', connected: chatgptConnected, spendUsd: chatgptTotals?.revenueImpact ?? 0,    activeUsers: chatgptTotals?.activeUsers ?? 0,                     hoursSaved: chatgptTotals?.hoursSaved ?? 0, error: chatgptError, loading: chatgptLoading },
+    { key: 'gemini' as ToolFilter,     label: 'Gemini',     color: '#4285f4', connected: false,            spendUsd: 0,                                    activeUsers: 0,                                                   hoursSaved: 0,                              error: null,         loading: false },
+    { key: 'perplexity' as ToolFilter, label: 'Perplexity', color: '#9b6dff', connected: false,            spendUsd: 0,                                    activeUsers: 0,                                                   hoursSaved: 0,                              error: null,         loading: false },
+  ], [claudeConnected, claudeSpend, claudeActive, claudeHours, claudeError, claudeLoading, supabaseData, supabaseLoading, chatgptConnected, chatgptTotals, chatgptError, chatgptLoading]);
 
   const totalSpend = allToolsData.reduce((s, t) => s + t.spendUsd, 0);
-  const totalHours = totalSpend * HOURS_PER_DOLLAR;
+  // ChatGPT hours are message-based (not spend-based), add separately
+  const totalHours = claudeHours + (chatgptTotals?.hoursSaved ?? 0);
 
   // ── Pill helpers ─────────────────────────────────────────────────────────────
 
@@ -357,7 +410,11 @@ export function AIToolsPage() {
                 {t.connected ? (t.key === 'supabase' ? `${t.activeUsers} sources` : t.activeUsers) : '—'}
               </span>
               <span style={{ fontSize: '0.9rem', fontWeight: 600, color: t.connected ? '#e4ede6' : '#3a5540' }}>
-                {t.key === 'supabase' ? `${supabaseData?.snapshotTotals?.totalRows ?? '—'} rows` : t.connected ? formatCurrency(t.spendUsd) : '—'}
+                {t.key === 'supabase'
+                  ? `${supabaseData?.snapshotTotals?.totalRows ?? '—'} rows`
+                  : t.key === 'chatgpt' && t.connected
+                    ? <>{formatCurrency(t.spendUsd)} <span style={{ fontSize: '0.65rem', color: '#6a8870' }}>est.</span></>
+                    : t.connected ? formatCurrency(t.spendUsd) : '—'}
               </span>
               <span style={{ fontSize: '0.85rem', color: t.connected ? '#8aad90' : '#3a5540' }}>
                 {t.key === 'supabase' ? timeAgo(supabaseData?.snapshotTotals?.lastSyncedAt ?? null) : t.connected ? formatHours(t.hoursSaved) : '—'}
@@ -967,6 +1024,140 @@ export function AIToolsPage() {
     );
   }
 
+  function ChatGPTView() {
+    const maxMessages = Math.max(1, ...chatgptUsers.map((u) => u.messages));
+
+    return (
+      <>
+        {/* Banner */}
+        <div style={{
+          background: chatgptConnected ? 'rgba(16,163,127,0.08)' : 'rgba(212,145,42,0.08)',
+          border: `1px solid ${chatgptConnected ? 'rgba(16,163,127,0.3)' : 'rgba(212,145,42,0.35)'}`,
+          borderRadius: 8, padding: '12px 16px', marginBottom: 20,
+          display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <Brain size={18} color={chatgptConnected ? '#10a37f' : '#d4912a'} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{ fontSize: '0.85rem', fontWeight: 600, color: '#e4ede6', margin: 0 }}>
+              {chatgptConnected
+                ? `Connected — ${chatgptStats?.claimedSeats ?? 0} seats · ${chatgptStats?.activeUsers ?? 0} active users`
+                : 'Connect ChatGPT Enterprise'}
+            </p>
+            <p style={{ fontSize: '0.72rem', color: '#8aad90', margin: '2px 0 0 0' }}>
+              {chatgptConnected
+                ? <>Data via ChatGPT Enterprise workspace analytics · refresh <code style={{ color: '#b8d4bd' }}>CHATGPT_SESSION_TOKEN</code> monthly.</>
+                : chatgptError
+                  ? <>Error: <code style={{ color: '#d4912a' }}>{chatgptError}</code></>
+                  : <>Set <code style={{ color: '#b8d4bd' }}>CHATGPT_SESSION_TOKEN</code> + <code style={{ color: '#b8d4bd' }}>CHATGPT_ACCOUNT_ID</code> in Vercel env vars.</>}
+            </p>
+          </div>
+          <a href="https://chatgpt.com/admin/usage" target="_blank" rel="noopener noreferrer" style={{
+            display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 6,
+            background: 'rgba(16,163,127,0.15)', border: '1px solid rgba(16,163,127,0.4)',
+            color: '#10a37f', fontSize: '0.7rem', fontWeight: 700,
+            letterSpacing: '0.06em', textTransform: 'uppercase', textDecoration: 'none', flexShrink: 0,
+          }}>
+            Open admin <ExternalLink size={11} />
+          </a>
+        </div>
+
+        {/* KPI cards */}
+        <SectionHeader eyebrow="1. USAGE" title="ChatGPT Enterprise usage" />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+          <BenchKPICard
+            label="Total Messages"
+            value={chatgptLoading ? '—' : (chatgptTotals?.totalMessages ?? 0).toLocaleString()}
+            showInfo
+            tooltip="Messages sent by all users in the selected period (from ChatGPT Enterprise workspace analytics)."
+          />
+          <BenchKPICard
+            label="Active Users"
+            value={chatgptLoading ? '—' : chatgptTotals?.activeUsers ?? 0}
+            showInfo
+            tooltip={`Users who sent at least 1 message. ${chatgptStats?.claimedSeats ?? 0} seats claimed of ${chatgptStats?.purchasedSeats ?? 0} purchased.`}
+            subBadge={
+              <span style={{ fontSize: '0.65rem', color: '#6a8870' }}>
+                {chatgptTotals?.activeUsers ?? 0}/{chatgptStats?.claimedSeats ?? 0} seats active
+              </span>
+            }
+          />
+          <BenchKPICard
+            label="Est. Hours Saved"
+            value={chatgptLoading ? '—' : formatHours(chatgptTotals?.hoursSaved ?? 0)}
+            showInfo
+            tooltip="15 messages = 5 minutes of equivalent manual effort saved. Formula: messages ÷ 180."
+          />
+          <BenchKPICard
+            label="Est. Value"
+            value={chatgptLoading ? '—' : formatCurrency(chatgptTotals?.revenueImpact ?? 0)}
+            showInfo
+            tooltip="Hours saved × $20/hr. Approximation based on 15 msgs = 5 min of work at $20/hr labour rate."
+          />
+        </div>
+
+        {/* Per-user leaderboard */}
+        <SectionHeader eyebrow="2. LEADERBOARD" title="Usage by team member" />
+        <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '48px 1.6fr 1.4fr 1fr 1fr 1.8fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
+            {['#', 'Name', 'Email', 'Messages', 'Hours Saved', 'Share'].map((h) => (
+              <span key={h} style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
+            ))}
+          </div>
+
+          {chatgptLoading && (
+            <div style={{ padding: 24, textAlign: 'center' }}>
+              <p style={{ fontSize: '0.8rem', color: '#6a8870' }}>Loading…</p>
+            </div>
+          )}
+
+          {!chatgptLoading && chatgptUsers.length === 0 && (
+            <div style={{ padding: 24, textAlign: 'center' }}>
+              <p style={{ fontSize: '0.8rem', color: '#6a8870' }}>
+                {chatgptError ? `Error: ${chatgptError}` : 'No user data. Set CHATGPT_SESSION_TOKEN + CHATGPT_ACCOUNT_ID.'}
+              </p>
+            </div>
+          )}
+
+          {chatgptUsers.map((u, i) => {
+            const pct = (u.messages / maxMessages) * 100;
+            const isTop = i === 0 && u.messages > 0;
+            return (
+              <div key={u.email} style={{
+                display: 'grid', gridTemplateColumns: '48px 1.6fr 1.4fr 1fr 1fr 1.8fr',
+                padding: '12px 16px', alignItems: 'center',
+                borderBottom: i < chatgptUsers.length - 1 ? '1px solid #1a2c1d' : 'none',
+                opacity: u.messages === 0 ? 0.45 : 1,
+              }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75rem', color: '#6a8870', fontWeight: 600 }}>
+                  {isTop && <Trophy size={12} color="#10a37f" />}{i + 1}
+                </span>
+                <span style={{ fontSize: '0.85rem', color: '#e4ede6', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.name}</span>
+                <span style={{ fontSize: '0.72rem', color: '#8aad90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.email}</span>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#e4ede6' }}>
+                  {u.messages.toLocaleString()}
+                </span>
+                <span style={{ fontSize: '0.85rem', color: '#8aad90' }}>
+                  {formatHours(u.hoursSaved)}
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 1, height: 6, background: '#112014', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: '#10a37f' }} />
+                  </div>
+                  <span style={{ fontSize: '0.7rem', color: '#6a8870', width: 36, textAlign: 'right' }}>{Math.round(pct)}%</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <p style={{ fontSize: '0.7rem', color: '#6a8870', lineHeight: 1.5 }}>
+          Source: ChatGPT Enterprise workspace analytics (chatgpt.com/admin/usage) ·
+          Est. value = messages ÷ 180 hrs × $20/hr · session token refreshes monthly.
+        </p>
+      </>
+    );
+  }
+
   function NotConnectedView({ toolDef }: { toolDef: ToolDef }) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: '80px 24px', textAlign: 'center' }}>
@@ -984,6 +1175,7 @@ export function AIToolsPage() {
   const handleRefresh = () => {
     refreshClaude();
     refreshSupabase();
+    refreshChatGPT();
   };
 
   return (
@@ -1055,7 +1247,8 @@ export function AIToolsPage() {
           {tool === 'all'      && AllToolsView()}
           {tool === 'claude'   && ClaudeView()}
           {tool === 'supabase' && SupabaseView()}
-          {tool !== 'all' && tool !== 'claude' && tool !== 'supabase' && activeTool && NotConnectedView({ toolDef: activeTool })}
+          {tool === 'chatgpt'  && ChatGPTView()}
+          {tool !== 'all' && tool !== 'claude' && tool !== 'supabase' && tool !== 'chatgpt' && activeTool && NotConnectedView({ toolDef: activeTool })}
           <div style={{ height: 24 }} />
         </div>
 
