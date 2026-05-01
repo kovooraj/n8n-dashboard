@@ -16,7 +16,6 @@ function toISO(d: Date): string {
 }
 
 export const dynamic = 'force-dynamic';
-export const revalidate = 0;
 
 // Business-impact constants — same baseline as FIN / ElevenLabs
 // 10 min of manual effort saved per successful n8n execution, $20/hr labour cost

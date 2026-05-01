@@ -128,44 +128,6 @@ async function fetchAnthropicUsageSnapshot(targetDate: string): Promise<RawSnaps
   return snaps;
 }
 
-// ── Claude per-user leaderboard ───────────────────────────────────────────────
-
-async function fetchLeaderboardSnapshot(targetDate: string): Promise<RawSnapshot[]> {
-  const sessionKey = process.env.CLAUDE_SESSION_KEY;
-  const orgId = process.env.CLAUDE_ORG_ID;
-  if (!sessionKey || !orgId) throw new Error('CLAUDE_SESSION_KEY or CLAUDE_ORG_ID not set');
-
-  const url = `https://claude.ai/api/organizations/${orgId}/analytics/users/rankings?metric=spend&start_date=${targetDate}&limit=100`;
-  const resp = await fetch(url, {
-    headers: {
-      cookie: `sessionKey=${sessionKey}`,
-      accept: 'application/json, text/plain, */*',
-      'accept-language': 'en-US,en;q=0.9',
-      referer: 'https://claude.ai/',
-      origin: 'https://claude.ai',
-      'anthropic-client-platform': 'web_claude_ai',
-      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    },
-    cache: 'no-store',
-  });
-  if (!resp.ok) {
-    const body = await resp.text().catch(() => '');
-    throw new Error(`claude.ai rankings ${resp.status}: ${body.slice(0, 200)}`);
-  }
-
-  const data = await resp.json() as { users?: { email_address?: string; value?: number; seat_tier?: string }[] };
-  const users = data.users ?? [];
-
-  // Store as a single snapshot: metrics.userCount + the full list serialised
-  // into individual user_{n} keys for quick retrieval.
-  const metrics: Record<string, number> = { userCount: users.length };
-  users.forEach((u, i) => {
-    metrics[`user_${i}_spend`] = u.value ?? 0;
-  });
-
-  return [{ date: targetDate, metrics }];
-}
-
 // ── Sync runner ───────────────────────────────────────────────────────────────
 
 type SyncResult = { source: string; status: 'ok' | 'skip' | 'error'; message?: string };
@@ -224,11 +186,10 @@ export async function GET(request: NextRequest) {
         );
       },
     ),
-    run('claude-leaderboard', () => fetchLeaderboardSnapshot(targetDate), targetDate),
   ]);
 
   const settled = results.map((r, i) => {
-    const sources = ['intercom-fin', 'elevenlabs-calls', 'n8n-history', 'anthropic-usage', 'claude-leaderboard'];
+    const sources = ['intercom-fin', 'elevenlabs-calls', 'n8n-history', 'anthropic-usage'];
     if (r.status === 'fulfilled') return r.value;
     return { source: sources[i], status: 'error' as const, message: String(r.reason) };
   });

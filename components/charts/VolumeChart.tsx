@@ -1,5 +1,6 @@
 'use client';
 
+import { useId } from 'react';
 import {
   AreaChart,
   Area,
@@ -49,15 +50,19 @@ function CustomTooltip({
 }
 
 export function VolumeChart({ data }: VolumeChartProps) {
+  const uid = useId();
+  const totalGradId = `totalGrad-${uid}`;
+  const resolvedGradId = `resolvedGrad-${uid}`;
+
   return (
     <ResponsiveContainer width="100%" height={200}>
       <AreaChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: data.length > 7 ? 20 : 4 }}>
         <defs>
-          <linearGradient id="totalGrad" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={totalGradId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%" stopColor="rgba(14,24,16,0.8)" stopOpacity={0.8} />
             <stop offset="95%" stopColor="rgba(14,24,16,0)" stopOpacity={0} />
           </linearGradient>
-          <linearGradient id="resolvedGrad" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={resolvedGradId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%" stopColor="rgba(61,186,98,0.25)" stopOpacity={0.8} />
             <stop offset="95%" stopColor="rgba(61,186,98,0)" stopOpacity={0} />
           </linearGradient>
@@ -92,7 +97,7 @@ export function VolumeChart({ data }: VolumeChartProps) {
           name="Overall Volume"
           stroke="#1a2c1d"
           strokeWidth={2}
-          fill="url(#totalGrad)"
+          fill={`url(#${totalGradId})`}
         />
         <Area
           type="monotone"
@@ -100,7 +105,7 @@ export function VolumeChart({ data }: VolumeChartProps) {
           name="Volume Resolved"
           stroke="#3dba62"
           strokeWidth={2}
-          fill="url(#resolvedGrad)"
+          fill={`url(#${resolvedGradId})`}
         />
       </AreaChart>
     </ResponsiveContainer>

@@ -59,12 +59,17 @@ function toISODay(unixSec: number): string {
   return `${y}-${m}-${day}`;
 }
 
+// Business-impact constants: each deflected call saves ~avgDuration seconds of
+// agent time; we monetise at $20/hr labour cost.
+const REVENUE_PER_HOUR = 20;
+
 export function buildElevenLabsDailySnapshots(convs: ELConversation[]): RawSnapshot[] {
   interface Acc {
     calls: number;
     durationSum: number;
     durationCount: number;
     transfers: number;
+    deflectedDurationSum: number; // seconds for non-transferred (deflected) calls
     agentIds: Set<string>;
   }
   const byDay = new Map<string, Acc>();
@@ -72,22 +77,30 @@ export function buildElevenLabsDailySnapshots(convs: ELConversation[]): RawSnaps
   for (const c of convs) {
     const day = toISODay(c.start_time_unix_secs);
     const acc = byDay.get(day) ?? {
-      calls: 0, durationSum: 0, durationCount: 0, transfers: 0, agentIds: new Set<string>(),
+      calls: 0, durationSum: 0, durationCount: 0,
+      transfers: 0, deflectedDurationSum: 0,
+      agentIds: new Set<string>(),
     };
     acc.calls += 1;
-    if (typeof c.call_duration_secs === 'number' && c.call_duration_secs > 0) {
-      acc.durationSum += c.call_duration_secs;
+    const dur = typeof c.call_duration_secs === 'number' && c.call_duration_secs > 0
+      ? c.call_duration_secs : 0;
+    if (dur > 0) {
+      acc.durationSum += dur;
       acc.durationCount += 1;
     }
-    // 'success' = call was transferred to a human agent (successful handoff).
-    // Any other outcome (null, 'failure', 'unknown') = AI deflected the call.
-    if (c.call_successful === 'success') acc.transfers += 1;
+    // 'success' = transferred to human agent. Anything else = AI deflected.
+    if (c.call_successful === 'success') {
+      acc.transfers += 1;
+    } else {
+      acc.deflectedDurationSum += dur; // time AI handled without human needed
+    }
     if (c.agent_id) acc.agentIds.add(c.agent_id);
     byDay.set(day, acc);
   }
 
   const out: RawSnapshot[] = [];
   for (const [date, acc] of byDay) {
+    const hoursSaved = acc.deflectedDurationSum / 3600;
     out.push({
       date,
       metrics: {
@@ -96,8 +109,8 @@ export function buildElevenLabsDailySnapshots(convs: ELConversation[]): RawSnaps
         transferRate: acc.calls > 0 ? (acc.transfers / acc.calls) * 100 : 0,
         agents: acc.agentIds.size,
         csat: 0,
-        hoursSaved: 0,
-        revenueImpact: 0,
+        hoursSaved,
+        revenueImpact: hoursSaved * REVENUE_PER_HOUR,
       },
     });
   }

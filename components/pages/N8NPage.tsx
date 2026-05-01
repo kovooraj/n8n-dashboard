@@ -297,9 +297,8 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
       if (cuResult.status === 'fulfilled') {
         const tasks = cuResult.value.tasks ?? [];
         setProjects(tasks);
-        console.log(`[n8n-page] ClickUp tasks: ${tasks.length}, n8n-tagged: ${tasks.filter((t: ClickUpTask) => t.platform === 'n8n').length}`);
       } else {
-        console.error('[n8n-page] ClickUp fetch failed:', cuResult.reason);
+        // ClickUp fetch failed — keep previous data silently
       }
     } catch {
       // keep previous data on error

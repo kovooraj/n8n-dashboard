@@ -88,17 +88,8 @@ export function OverviewPage() {
       if (cuResult.status === 'fulfilled') {
         const tasks = cuResult.value.tasks ?? [];
         setProjects(tasks);
-        console.log(`[dashboard] ClickUp tasks loaded: ${tasks.length}`, {
-          build: 'v3',
-          period,
-          statuses: tasks.reduce((a: Record<string, number>, t: ClickUpTask) => {
-            a[t.status] = (a[t.status] ?? 0) + 1;
-            return a;
-          }, {}),
-        });
-      } else {
-        console.error('[dashboard] ClickUp fetch failed:', cuResult.reason);
       }
+      // ClickUp failures are non-fatal; project list stays empty/unchanged
     }).catch(() => {}).finally(() => { setLoading(false); setRefreshing(false); });
   }, [period]);
 
@@ -156,37 +147,44 @@ export function OverviewPage() {
   const completedProjects  = projects.filter((p) => norm(p.status) === 'complete'); // always shown for count
   const highUrgentInProg   = inProgressProjects.filter((p) => p.priority === 'high' || p.priority === 'urgent');
 
-  // ── Combined chart: merge N8N + FIN + ElevenLabs buckets by label ──────────
-  // All three sources produce the same period-aligned labels (day/week/month),
-  // so we align them by label index. Each platform contributes:
+  // ── Combined chart: merge N8N + FIN + ElevenLabs buckets by ISO-date id ───
+  // Each platform contributes:
   //   success = events it handled correctly
   //   error   = events that failed / escalated
   //     N8N : totalTriggers / failedTriggers
   //     FIN : finResolved as success, (finInvolvement - finResolved) as error
   //     11L : deflected calls as success, transferred calls as error
-  const chartLabels = (n8nBuckets.length > 0 ? n8nBuckets : finBuckets.length > 0 ? finBuckets : elBuckets)
-    .map((b) => b.label ?? b.weekLabel);
+  // We align by bucket.id (ISO date or period key) so mismatched array lengths
+  // never cause one source's data to shift into the wrong date column.
+  const n8nById = new Map(n8nBuckets.map((b) => [b.id, b]));
+  const finById = new Map(finBuckets.map((b) => [b.id, b]));
+  const elById  = new Map(elBuckets.map((b)  => [b.id, b]));
 
-  const chartData: ChartPoint[] = chartLabels.map((label, i) => {
-    const n = n8nBuckets[i];
-    const f = finBuckets[i];
-    const e = elBuckets[i];
+  // Use whichever source has the most buckets as the canonical id order.
+  const primaryBuckets = (n8nBuckets.length >= finBuckets.length && n8nBuckets.length >= elBuckets.length)
+    ? n8nBuckets
+    : finBuckets.length >= elBuckets.length ? finBuckets : elBuckets;
+
+  const chartData: ChartPoint[] = primaryBuckets.map((primary) => {
+    const n = n8nById.get(primary.id);
+    const f = finById.get(primary.id);
+    const e = elById.get(primary.id);
 
     const n8nSuccess = n ? Math.max(0, (n.totalTriggers ?? 0) - (n.failedTriggers ?? 0)) : 0;
     const n8nErr     = n?.failedTriggers ?? 0;
 
-    const finInv  = f?.finInvolvement ?? 0;
-    const finRes  = f?.finResolved ?? 0;
+    const finInv     = f?.finInvolvement ?? 0;
+    const finRes     = f?.finResolved ?? 0;
     const finSuccess = Math.max(0, finRes);
     const finErr     = Math.max(0, finInv - finRes);
 
     const elCalls    = e?.calls ?? 0;
     const elXferRate = (e?.transferRate ?? 0) / 100;
-    const elErr     = Math.round(elCalls * elXferRate);
-    const elSuccess = Math.max(0, elCalls - elErr);
+    const elErr      = Math.round(elCalls * elXferRate);
+    const elSuccess  = Math.max(0, elCalls - elErr);
 
     return {
-      label,
+      label: primary.label ?? primary.weekLabel,
       success: n8nSuccess + finSuccess + elSuccess,
       error: n8nErr + finErr + elErr,
     };

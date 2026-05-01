@@ -55,6 +55,6 @@ export async function GET(): Promise<Response> {
       fetchedAt: new Date().toISOString(),
       error: message,
     };
-    return Response.json(payload, { status: 200 });
+    return Response.json(payload, { status: 502 });
   }
 }
