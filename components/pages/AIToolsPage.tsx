@@ -497,7 +497,7 @@ export function AIToolsPage() {
 
         {/* Connect prompts */}
         <SectionHeader eyebrow="ADD MORE TOOLS" title="Connect additional AI tools" />
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 32 }}>
           {TOOLS.filter((t) => !t.connected).map((t) => (
             <div key={t.key} style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: '16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -508,6 +508,143 @@ export function AIToolsPage() {
             </div>
           ))}
         </div>
+
+        {/* Manage Roster */}
+        <SectionHeader eyebrow="SETTINGS" title="Manage roster assignments" />
+        <p style={{ fontSize: '0.75rem', color: '#6a8870', marginBottom: 16, lineHeight: 1.5 }}>
+          Assign departments and companies for every person across Claude and ChatGPT. Changes apply to all department breakdowns — saved to Supabase, no deploy needed.
+        </p>
+        {(() => {
+          // People in ChatGPT who are not in the static TEAM list
+          const teamEmailSet = new Set(TEAM.map((m) => m.email.toLowerCase()));
+          const chatgptOnly = chatgptUsers.filter((u) => !teamEmailSet.has(u.email.toLowerCase()) && u.messages > 0);
+
+          function RosterRow({ email, name, defaultDept, defaultCompanies, isTeamMember, isLast }: {
+            email: string; name: string; defaultDept: string; defaultCompanies: Company[];
+            isTeamMember: boolean; isLast: boolean;
+          }) {
+            const saved = rosterOverrides[email];
+            const edit  = rosterEdits[email] ?? { department: defaultDept, companies: defaultCompanies };
+            const isDirty = JSON.stringify(rosterEdits[email]) !== JSON.stringify(rosterOverrides[email]);
+            const isOverridden = !!saved;
+            return (
+              <div style={{
+                display: 'grid', gridTemplateColumns: '1.8fr 1.4fr 1fr 80px',
+                padding: '10px 16px', alignItems: 'center',
+                borderBottom: isLast ? 'none' : '1px solid #1a2c1d',
+                background: isDirty ? 'rgba(212,145,42,0.04)' : 'transparent',
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <p style={{ fontSize: '0.82rem', fontWeight: 600, color: '#e4ede6', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {name}
+                    {isOverridden && <span style={{ fontSize: '0.55rem', fontWeight: 700, color: '#4a9eca', letterSpacing: '0.08em', padding: '1px 5px', background: 'rgba(74,158,202,0.12)', border: '1px solid rgba(74,158,202,0.3)', borderRadius: 3 }}>CUSTOM</span>}
+                    {!isTeamMember && <span style={{ fontSize: '0.55rem', fontWeight: 700, color: '#10a37f', letterSpacing: '0.08em', padding: '1px 5px', background: 'rgba(16,163,127,0.12)', border: '1px solid rgba(16,163,127,0.3)', borderRadius: 3 }}>ChatGPT</span>}
+                  </p>
+                  <p style={{ fontSize: '0.68rem', color: '#6a8870', margin: '2px 0 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{email}</p>
+                </div>
+                <input
+                  value={edit.department}
+                  onChange={(e) => setRosterEdits((prev) => ({ ...prev, [email]: { ...edit, department: e.target.value } }))}
+                  style={{
+                    background: '#0a1410', border: `1px solid ${isDirty ? 'rgba(212,145,42,0.4)' : '#1a2c1d'}`,
+                    borderRadius: 4, color: '#e4ede6', fontSize: '0.78rem',
+                    padding: '5px 8px', outline: 'none', width: '90%',
+                  }}
+                />
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {(['sinalite', 'willowpack'] as Company[]).map((c) => {
+                    const active = edit.companies.includes(c);
+                    const col = c === 'sinalite' ? '#3dba62' : '#4a9eca';
+                    return (
+                      <button key={c} onClick={() => {
+                        const next = active ? edit.companies.filter((x) => x !== c) : [...edit.companies, c];
+                        if (next.length === 0) return;
+                        setRosterEdits((prev) => ({ ...prev, [email]: { ...edit, companies: next as Company[] } }));
+                      }} style={{
+                        padding: '2px 7px', borderRadius: 4, cursor: 'pointer',
+                        background: active ? `${col}20` : 'transparent',
+                        border: `1px solid ${active ? col + '60' : '#1a2c1d'}`,
+                        color: active ? col : '#4a6450',
+                        fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase',
+                      }}>{c === 'sinalite' ? 'SL' : 'WP'}</button>
+                    );
+                  })}
+                </div>
+                <button
+                  onClick={() => setRosterEdits((prev) => { const next = { ...prev }; delete next[email]; return next; })}
+                  title={isTeamMember ? 'Reset to static default' : 'Remove mapping (mark as Unmapped)'}
+                  style={{
+                    background: 'transparent', border: '1px solid #1a2c1d', borderRadius: 4,
+                    color: '#6a8870', fontSize: '0.65rem', padding: '3px 8px', cursor: 'pointer',
+                    opacity: isOverridden || isDirty ? 1 : 0.3,
+                  }}
+                >Reset</button>
+              </div>
+            );
+          }
+
+          const allRows = [
+            ...TEAM.map((m) => ({ email: m.email.toLowerCase(), name: m.name, defaultDept: m.department, defaultCompanies: m.companies, isTeamMember: true })),
+            ...chatgptOnly.map((u) => ({ email: u.email.toLowerCase(), name: u.name, defaultDept: 'Unmapped', defaultCompanies: ['sinalite', 'willowpack'] as Company[], isTeamMember: false })),
+          ];
+
+          return (
+            <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 1.4fr 1fr 80px', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
+                {['Member', 'Department', 'Company', ''].map((h, idx) => (
+                  <span key={idx} style={{ fontSize: '0.6rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
+                ))}
+              </div>
+              {/* Team members section */}
+              {TEAM.map((m, i) => (
+                <RosterRow key={m.email.toLowerCase()} email={m.email.toLowerCase()} name={m.name}
+                  defaultDept={m.department} defaultCompanies={m.companies} isTeamMember={true}
+                  isLast={i === allRows.length - 1} />
+              ))}
+              {/* ChatGPT-only users */}
+              {chatgptOnly.length > 0 && (
+                <>
+                  <div style={{ padding: '6px 16px', background: 'rgba(16,163,127,0.06)', borderTop: '1px solid rgba(16,163,127,0.2)', borderBottom: '1px solid rgba(16,163,127,0.2)' }}>
+                    <span style={{ fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#10a37f' }}>
+                      ChatGPT users not in static roster ({chatgptOnly.length})
+                    </span>
+                  </div>
+                  {chatgptOnly.map((u, i) => (
+                    <RosterRow key={u.email.toLowerCase()} email={u.email.toLowerCase()} name={u.name}
+                      defaultDept="Unmapped" defaultCompanies={['sinalite', 'willowpack']} isTeamMember={false}
+                      isLast={i === chatgptOnly.length - 1} />
+                  ))}
+                </>
+              )}
+              {chatgptOnly.length === 0 && !chatgptConnected && (
+                <div style={{ padding: '12px 16px', borderTop: '1px solid #1a2c1d' }}>
+                  <p style={{ fontSize: '0.72rem', color: '#4a6450', margin: 0 }}>Connect ChatGPT Enterprise to see ChatGPT-only users here.</p>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button
+            onClick={saveRosterOverrides}
+            disabled={rosterSaveStatus === 'saving'}
+            style={{
+              padding: '8px 20px', borderRadius: 6, cursor: rosterSaveStatus === 'saving' ? 'not-allowed' : 'pointer',
+              background: '#3dba62', border: 'none', color: '#050d07',
+              fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+              opacity: rosterSaveStatus === 'saving' ? 0.6 : 1,
+            }}
+          >{rosterSaveStatus === 'saving' ? 'Saving…' : 'Save Changes'}</button>
+          <button
+            onClick={() => setRosterEdits(rosterOverrides)}
+            style={{ padding: '8px 16px', borderRadius: 6, cursor: 'pointer', background: 'transparent', border: '1px solid #1a2c1d', color: '#6a8870', fontSize: '0.75rem', fontWeight: 600 }}
+          >Discard Edits</button>
+          {rosterSaveStatus === 'saved' && <span style={{ fontSize: '0.75rem', color: '#3dba62', fontWeight: 600 }}>✓ Saved successfully</span>}
+          {rosterSaveStatus === 'error' && <span style={{ fontSize: '0.75rem', color: '#e05858', fontWeight: 600 }}>✗ Save failed — check Supabase connection</span>}
+        </div>
+        <p style={{ fontSize: '0.68rem', color: '#4a6450', marginTop: 10, lineHeight: 1.5 }}>
+          SL = SinaLite &nbsp;·&nbsp; WP = Willowpack. Overrides stored in Supabase, applied immediately to all department breakdowns. &quot;Reset&quot; reverts roster members to their static default; ChatGPT-only users return to &quot;Unmapped&quot;.
+        </p>
       </>
     );
   }
@@ -909,142 +1046,6 @@ export function AIToolsPage() {
         <p style={{ fontSize: '0.7rem', color: '#6a8870', marginTop: 16, lineHeight: 1.5 }}>
           Source: claude.ai internal analytics · {TEAM.length}-person roster in <code style={{ color: '#8aad90' }}>lib/aiToolsTeam.ts</code> · cached 25h · refreshed daily via Vercel cron.
         </p>
-
-        {/* Section 4 — Roster Settings */}
-        <div style={{ marginTop: 32 }}>
-          <SectionHeader eyebrow="4. SETTINGS" title="Manage roster assignments" />
-          <p style={{ fontSize: '0.75rem', color: '#6a8870', marginBottom: 16, lineHeight: 1.5 }}>
-            Edit each team member&apos;s department label and company attribution. Changes are saved to Supabase and applied immediately — no code deploy needed.
-          </p>
-
-          <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 14 }}>
-            {/* Column headers */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 1.4fr 1fr 80px', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
-              {['Member', 'Department', 'Company', ''].map((h, i) => (
-                <span key={i} style={{ fontSize: '0.6rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
-              ))}
-            </div>
-
-            {TEAM.map((m, i) => {
-              const email = m.email.toLowerCase();
-              const saved = rosterOverrides[email];
-              const edit  = rosterEdits[email] ?? { department: m.department, companies: m.companies };
-              const isDirty = JSON.stringify(rosterEdits[email]) !== JSON.stringify(rosterOverrides[email]);
-              const isOverridden = !!saved;
-
-              return (
-                <div key={email} style={{
-                  display: 'grid', gridTemplateColumns: '1.8fr 1.4fr 1fr 80px',
-                  padding: '10px 16px', alignItems: 'center',
-                  borderBottom: i < TEAM.length - 1 ? '1px solid #1a2c1d' : 'none',
-                  background: isDirty ? 'rgba(212,145,42,0.04)' : 'transparent',
-                }}>
-                  {/* Name + email */}
-                  <div style={{ minWidth: 0 }}>
-                    <p style={{ fontSize: '0.82rem', fontWeight: 600, color: '#e4ede6', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {m.name}
-                      {isOverridden && <span style={{ fontSize: '0.55rem', fontWeight: 700, color: '#4a9eca', letterSpacing: '0.08em', padding: '1px 5px', background: 'rgba(74,158,202,0.12)', border: '1px solid rgba(74,158,202,0.3)', borderRadius: 3 }}>CUSTOM</span>}
-                    </p>
-                    <p style={{ fontSize: '0.68rem', color: '#6a8870', margin: '2px 0 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.email}</p>
-                  </div>
-
-                  {/* Department input */}
-                  <input
-                    value={edit.department}
-                    onChange={(e) => setRosterEdits((prev) => ({
-                      ...prev,
-                      [email]: { ...edit, department: e.target.value },
-                    }))}
-                    style={{
-                      background: '#0a1410', border: `1px solid ${isDirty ? 'rgba(212,145,42,0.4)' : '#1a2c1d'}`,
-                      borderRadius: 4, color: '#e4ede6', fontSize: '0.78rem',
-                      padding: '5px 8px', outline: 'none', width: '90%',
-                    }}
-                  />
-
-                  {/* Company toggles */}
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                    {(['sinalite', 'willowpack'] as Company[]).map((c) => {
-                      const active = edit.companies.includes(c);
-                      const col = c === 'sinalite' ? '#3dba62' : '#4a9eca';
-                      return (
-                        <button key={c} onClick={() => {
-                          const next = active
-                            ? edit.companies.filter((x) => x !== c)
-                            : [...edit.companies, c];
-                          if (next.length === 0) return; // must keep at least one
-                          setRosterEdits((prev) => ({ ...prev, [email]: { ...edit, companies: next as Company[] } }));
-                        }} style={{
-                          padding: '2px 7px', borderRadius: 4, cursor: 'pointer',
-                          background: active ? `${col}20` : 'transparent',
-                          border: `1px solid ${active ? col + '60' : '#1a2c1d'}`,
-                          color: active ? col : '#4a6450',
-                          fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase',
-                        }}>
-                          {c === 'sinalite' ? 'SL' : 'WP'}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Reset row button */}
-                  <button
-                    onClick={() => {
-                      setRosterEdits((prev) => {
-                        const next = { ...prev };
-                        delete next[email]; // remove override → fall back to static default
-                        return next;
-                      });
-                    }}
-                    title="Reset to static default"
-                    style={{
-                      background: 'transparent', border: '1px solid #1a2c1d', borderRadius: 4,
-                      color: '#6a8870', fontSize: '0.65rem', padding: '3px 8px', cursor: 'pointer',
-                      opacity: isOverridden || isDirty ? 1 : 0.3,
-                    }}
-                  >
-                    Reset
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Save / Reset All */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button
-              onClick={saveRosterOverrides}
-              disabled={rosterSaveStatus === 'saving'}
-              style={{
-                padding: '8px 20px', borderRadius: 6, cursor: rosterSaveStatus === 'saving' ? 'not-allowed' : 'pointer',
-                background: '#3dba62', border: 'none', color: '#050d07',
-                fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
-                opacity: rosterSaveStatus === 'saving' ? 0.6 : 1,
-              }}
-            >
-              {rosterSaveStatus === 'saving' ? 'Saving…' : 'Save Changes'}
-            </button>
-            <button
-              onClick={() => setRosterEdits(rosterOverrides)}
-              style={{
-                padding: '8px 16px', borderRadius: 6, cursor: 'pointer',
-                background: 'transparent', border: '1px solid #1a2c1d', color: '#6a8870',
-                fontSize: '0.75rem', fontWeight: 600,
-              }}
-            >
-              Discard Edits
-            </button>
-            {rosterSaveStatus === 'saved' && (
-              <span style={{ fontSize: '0.75rem', color: '#3dba62', fontWeight: 600 }}>✓ Saved successfully</span>
-            )}
-            {rosterSaveStatus === 'error' && (
-              <span style={{ fontSize: '0.75rem', color: '#e05858', fontWeight: 600 }}>✗ Save failed — check Supabase connection</span>
-            )}
-          </div>
-          <p style={{ fontSize: '0.68rem', color: '#4a6450', marginTop: 10, lineHeight: 1.5 }}>
-            SL = SinaLite &nbsp;·&nbsp; WP = Willowpack. Overrides are stored in Supabase and take effect immediately without redeploying. Row &quot;Reset&quot; reverts that person to their static default from <code style={{ color: '#6a8870' }}>aiToolsTeam.ts</code>.
-          </p>
-        </div>
       </>
     );
   }
@@ -1176,7 +1177,17 @@ export function AIToolsPage() {
         </div>
 
         {/* Department breakdown */}
-        <SectionHeader eyebrow="3. DEPARTMENTS" title="Usage by department" />
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 20 }}>
+          <div>
+            <p className="section-eyebrow" style={{ marginBottom: 6 }}>3. DEPARTMENTS</p>
+            <h2 style={{ fontSize: '1.75rem', fontWeight: 600, color: '#e4ede6', margin: 0 }}>Usage by department</h2>
+          </div>
+          <button onClick={() => setTool('all')} style={{
+            fontSize: '0.68rem', fontWeight: 600, color: '#6a8870', background: 'transparent',
+            border: '1px solid #1a2c1d', borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
+            letterSpacing: '0.06em', textTransform: 'uppercase', flexShrink: 0,
+          }}>Manage roster →</button>
+        </div>
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 24 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 0.7fr 1fr 1.8fr 1.4fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
             {['Department', 'Users', 'Messages', 'Share', 'Top user'].map((h) => (
