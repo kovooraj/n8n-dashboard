@@ -5,24 +5,51 @@
   "installCommand": "npm install",
   "crons": [
     {
+      "comment": "Step 1 — 7:00am EST (12:00 UTC): Sync yesterday's data into Supabase",
       "path": "/api/cron/sync-daily",
-      "schedule": "0 2 * * *"
+      "schedule": "0 12 * * *"
     },
     {
+      "comment": "Step 2 — 7:30am EST (12:30 UTC): Warm weekly caches + invalidate slow-period caches",
       "path": "/api/intercom/fin?period=weekly&refresh=1",
-      "schedule": "0 22 * * *"
+      "schedule": "30 12 * * *"
     },
     {
       "path": "/api/elevenlabs/calls?period=weekly&refresh=1",
-      "schedule": "0 22 * * *"
+      "schedule": "30 12 * * *"
     },
     {
       "path": "/api/anthropic/usage?period=weekly&refresh=1",
-      "schedule": "0 22 * * *"
+      "schedule": "30 12 * * *"
     },
     {
       "path": "/api/claude/leaderboard?period=weekly&refresh=1",
-      "schedule": "0 22 * * *"
+      "schedule": "30 12 * * *"
+    },
+    {
+      "comment": "Step 3 — 7:45am EST (12:45 UTC): Pre-populate slow-period caches (monthly/quarterly/annually) so 8am users get instant results",
+      "path": "/api/intercom/fin?period=monthly&warm=1",
+      "schedule": "45 12 * * *"
+    },
+    {
+      "path": "/api/intercom/fin?period=quarterly&warm=1",
+      "schedule": "45 12 * * *"
+    },
+    {
+      "path": "/api/intercom/fin?period=annually&warm=1",
+      "schedule": "45 12 * * *"
+    },
+    {
+      "path": "/api/elevenlabs/calls?period=monthly&warm=1",
+      "schedule": "45 12 * * *"
+    },
+    {
+      "path": "/api/elevenlabs/calls?period=quarterly&warm=1",
+      "schedule": "45 12 * * *"
+    },
+    {
+      "path": "/api/elevenlabs/calls?period=annually&warm=1",
+      "schedule": "45 12 * * *"
     }
   ]
 }

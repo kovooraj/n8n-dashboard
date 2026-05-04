@@ -81,16 +81,21 @@ export async function GET(request: NextRequest) {
   const days = lookbackDays(period);
   const ua = request.headers.get('user-agent') ?? '';
   const isCron = ua.toLowerCase().startsWith('vercel-cron');
-  const forceRefresh = isCron || searchParams.get('refresh') === '1';
+  // ?warm=1 = cron cache pre-population (do NOT invalidate, just fill the slow-period cache)
+  const isWarm       = searchParams.get('warm')    === '1';
+  const forceRefresh = (!isWarm && isCron) || searchParams.get('refresh') === '1';
   if (forceRefresh) revalidateTag(CACHE_TAG, 'max');
 
-  // ── Fast path: serve cached body for slow periods ──
-  if (period !== 'weekly' && !forceRefresh) {
+  // ── Slow-period fast path: monthly / quarterly / annually ──────────────────
+  // Always served via the 22-hour period cache.
+  // forceRefresh already invalidated the tag above, so getSlowPeriodBody will
+  // recompute and re-populate the cache for the next 22 hours.
+  if (period !== 'weekly') {
     try {
       const body = await getSlowPeriodBody(period, days);
       return NextResponse.json(body, { headers: { 'Cache-Control': 'no-store' } });
     } catch {
-      // Fall through to live path
+      // Fall through to live path on cache failure
     }
   }
 

@@ -9,7 +9,7 @@ import { HideCompletedToggle } from '@/components/HideCompletedToggle';
 import dynamic from 'next/dynamic';
 import type { DashboardPeriod, ClickUpTask } from '@/lib/types';
 import { formatCurrency, formatHours } from '@/lib/chartUtils';
-import { TEAM, type Company } from '@/lib/aiToolsTeam';
+import { TEAM, lookupMember, type Company } from '@/lib/aiToolsTeam';
 
 const VolumeChart = dynamic(
   () => import('@/components/charts/VolumeChart').then((m) => m.VolumeChart),
@@ -315,6 +315,31 @@ export function AIToolsPage() {
   const maxDeptSpend = Math.max(1, ...filteredDepts.map((d) => d.spendUsd));
   const maxUserSpend = Math.max(1, ...filteredUsers.map((u) => u.spendUsd));
   const unmappedUsers = filteredUsers.filter((u) => !u.inRoster && u.spendUsd > 0);
+
+  // ── ChatGPT department rollup ────────────────────────────────────────────────
+  interface ChatGPTDeptRow {
+    department: string;
+    users: number;
+    messages: number;
+    topUser: string;
+    topMessages: number;
+  }
+  const chatgptDepts = useMemo(() => {
+    const deptMap = new Map<string, ChatGPTDeptRow>();
+    for (const u of chatgptUsers) {
+      if (u.messages === 0) continue;
+      const ov  = rosterOverrides[u.email.toLowerCase()];
+      const tm  = lookupMember(u.email);
+      const dept = ov?.department ?? tm?.department ?? 'Unmapped';
+      const cur = deptMap.get(dept) ?? { department: dept, users: 0, messages: 0, topUser: '—', topMessages: -1 };
+      cur.users   += 1;
+      cur.messages += u.messages;
+      if (u.messages > cur.topMessages) { cur.topMessages = u.messages; cur.topUser = u.name; }
+      deptMap.set(dept, cur);
+    }
+    return Array.from(deptMap.values()).sort((a, b) => b.messages - a.messages);
+  }, [chatgptUsers, rosterOverrides]);
+  const maxChatGPTDeptMessages = Math.max(1, ...chatgptDepts.map((d) => d.messages));
 
   // ── Supabase chart data ─────────────────────────────────────────────────────
   const supabaseChartData = useMemo(() => {
@@ -1150,9 +1175,56 @@ export function AIToolsPage() {
           })}
         </div>
 
+        {/* Department breakdown */}
+        <SectionHeader eyebrow="3. DEPARTMENTS" title="Usage by department" />
+        <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 0.7fr 1fr 1.8fr 1.4fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
+            {['Department', 'Users', 'Messages', 'Share', 'Top user'].map((h) => (
+              <span key={h} style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
+            ))}
+          </div>
+
+          {chatgptLoading && (
+            <div style={{ padding: 24, textAlign: 'center' }}>
+              <p style={{ fontSize: '0.8rem', color: '#6a8870' }}>Loading…</p>
+            </div>
+          )}
+
+          {!chatgptLoading && chatgptDepts.length === 0 && (
+            <div style={{ padding: 24, textAlign: 'center' }}>
+              <p style={{ fontSize: '0.8rem', color: '#6a8870' }}>
+                {chatgptError ? `Error: ${chatgptError}` : 'No department data — connect ChatGPT Enterprise to populate this table.'}
+              </p>
+            </div>
+          )}
+
+          {chatgptDepts.map((d, i) => {
+            const pct = (d.messages / maxChatGPTDeptMessages) * 100;
+            return (
+              <div key={d.department} style={{
+                display: 'grid', gridTemplateColumns: '1.6fr 0.7fr 1fr 1.8fr 1.4fr',
+                padding: '12px 16px', alignItems: 'center',
+                borderBottom: i < chatgptDepts.length - 1 ? '1px solid #1a2c1d' : 'none',
+              }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#e4ede6' }}>{d.department}</span>
+                <span style={{ fontSize: '0.85rem', color: '#8aad90' }}>{d.users}</span>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#e4ede6' }}>{d.messages.toLocaleString()}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 1, height: 6, background: '#112014', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: '#10a37f' }} />
+                  </div>
+                  <span style={{ fontSize: '0.7rem', color: '#6a8870', width: 36, textAlign: 'right' }}>{Math.round(pct)}%</span>
+                </div>
+                <span style={{ fontSize: '0.8rem', color: '#8aad90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topUser}</span>
+              </div>
+            );
+          })}
+        </div>
+
         <p style={{ fontSize: '0.7rem', color: '#6a8870', lineHeight: 1.5 }}>
           Source: ChatGPT Enterprise workspace analytics (chatgpt.com/admin/usage) ·
           Est. value = messages ÷ 180 hrs × $20/hr · session token refreshes monthly.
+          Department attribution uses the team roster — unmapped users appear under &quot;Unmapped&quot;.
         </p>
       </>
     );
