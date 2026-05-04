@@ -6,9 +6,9 @@
  *
  * Bucket granularity per period:
  *   weekly     → day   (last 7 days)
- *   monthly    → week  (last ~4 weeks)
- *   quarterly  → month (current fiscal quarter — 3 months)
- *   annually   → month (current fiscal year — up to 12 months starting August)
+ *   monthly    → week  (weeks within current calendar month — 4 or 5 weeks)
+ *   quarterly  → month (last 4 calendar months rolling)
+ *   annually   → month (current fiscal year — 12 months starting August)
  *
  * Fiscal year starts in August. Fiscal quarters:
  *   Q1 FY: Aug–Oct
@@ -76,12 +76,12 @@ export function periodBucketGranularity(period: DashboardPeriod): Granularity {
   return 'month'; // quarterly + annually
 }
 
-/** Number of buckets expected for a period. */
+/** Number of buckets expected for a period (approximate; monthly is dynamic). */
 export function periodBucketCount(period: DashboardPeriod): number {
   switch (period) {
     case 'weekly': return 7;
-    case 'monthly': return 4;
-    case 'quarterly': return 3;
+    case 'monthly': return 5; // calendar month has 4–5 ISO weeks
+    case 'quarterly': return 4;
     case 'annually': return 12;
   }
 }
@@ -167,27 +167,31 @@ export function buildBucketRange(period: DashboardPeriod, now: Date = new Date()
       });
     }
   } else if (gran === 'week') {
-    // Last `count` ISO weeks ending in the week containing today
-    const thisWeekStart = startOfISOWeek(today);
-    for (let i = count - 1; i >= 0; i--) {
-      const ws = new Date(thisWeekStart);
-      ws.setUTCDate(ws.getUTCDate() - i * 7);
+    // ISO weeks that overlap the current calendar month.
+    // Start from the Monday on/before the 1st of the month; stop when the
+    // week-start is past the last day of the month.
+    const monthStart = startOfMonth(today);
+    const monthEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0));
+    let ws = startOfISOWeek(monthStart);
+    while (ws <= monthEnd) {
       const we = new Date(ws);
       we.setUTCDate(we.getUTCDate() + 6);
       const wn = isoWeekNumber(ws);
       buckets.push({
         id: toISO(ws),
-        start: ws,
+        start: new Date(ws),
         end: we,
         label: `W${wn}`,
         longLabel: `Week ${wn} · ${MONTH_SHORT[ws.getUTCMonth()]} ${ws.getUTCDate()}–${we.getUTCDate()}`,
       });
+      ws = new Date(ws);
+      ws.setUTCDate(ws.getUTCDate() + 7);
     }
   } else if (period === 'quarterly') {
-    // Current fiscal quarter (3 months starting from fiscal Q start)
-    const qStart = fiscalQuarterStart(today);
-    for (let i = 0; i < 3; i++) {
-      const ms = new Date(Date.UTC(qStart.getUTCFullYear(), qStart.getUTCMonth() + i, 1));
+    // Last 4 calendar months rolling (ending with the current month)
+    const thisMonthStart = startOfMonth(today);
+    for (let i = 3; i >= 0; i--) {
+      const ms = new Date(Date.UTC(thisMonthStart.getUTCFullYear(), thisMonthStart.getUTCMonth() - i, 1));
       const me = new Date(Date.UTC(ms.getUTCFullYear(), ms.getUTCMonth() + 1, 0));
       buckets.push({
         id: `${ms.getUTCFullYear()}-${pad(ms.getUTCMonth() + 1)}`,
