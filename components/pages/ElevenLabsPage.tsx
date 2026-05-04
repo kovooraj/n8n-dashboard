@@ -11,10 +11,11 @@ import { HideCompletedToggle } from '@/components/HideCompletedToggle';
 import type { DashboardPeriod, ElevenLabsSnapshot, ElevenLabsTotals, ClickUpTask } from '@/lib/types';
 import { buildVolumeFromBuckets, formatCurrency, formatHours } from '@/lib/chartUtils';
 import type { VolumePoint } from '@/lib/types';
+import { ChartSkeleton, KPIGridSkeleton } from '@/components/Skeleton';
 
 const VolumeChart = dynamic(
   () => import('@/components/charts/VolumeChart').then((m) => m.VolumeChart),
-  { ssr: false, loading: () => <div style={{ height: 200, background: '#0d1810', borderRadius: 8 }} /> }
+  { ssr: false, loading: () => <ChartSkeleton height={200} /> }
 );
 
 function SectionHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
@@ -123,45 +124,49 @@ export function ElevenLabsPage() {
         </div>
 
         {/* KPI cards — 5 cards for ElevenLabs */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
-          <BenchKPICard
-            label="# of Calls Auto Resolved"
-            value={loading ? '—' : resolvedCount.toLocaleString()}
-            showInfo
-            tooltip={`Calls the AI voice agent handled end-to-end without transferring to a human. Formula: total calls × (deflection rate ÷ 100) = ${loading ? 0 : (totals?.calls ?? 0).toLocaleString()} × ${loading ? 0 : deflectionRate}% = ${loading ? 0 : resolvedCount.toLocaleString()} calls for the ${period} window.`}
-          />
-          <BenchKPICard
-            label="Transferred to Live Agent"
-            value={loading ? '—' : `${totals?.transferRate ?? 0}%`}
-            showInfo
-            tooltip={`Average of daily "Transfer to live agent %" values over the ${period} window. The inverse (100 − this) is the deflection rate — calls the AI agent handled end-to-end without handing off.`}
-          />
-          <BenchKPICard
-            label="Estimated Hours Saved"
-            value={loading ? '—' : formatHours(hoursSavedCalc)}
-            showInfo
-            tooltip={`Resolved calls × average call duration (seconds) ÷ 3600. ${loading ? 0 : resolvedCount.toLocaleString()} resolved × ${loading ? 0 : (totals?.avgDuration ?? 0)}s avg duration for the ${period} window.`}
-          />
-          <BenchKPICard
-            label="Estimated Revenue Impact"
-            value={loading ? '—' : formatCurrency(revenueImpactCalc)}
-            showInfo
-            tooltip={`Hours saved × $${REVENUE_PER_HOUR}/hour (loaded labour rate). ${loading ? '0.0h' : formatHours(hoursSavedCalc)} × $${REVENUE_PER_HOUR} for the ${period} window.`}
-          />
-          <BenchKPICard
-            label="CSAT Score"
-            value={loading ? '—' : (totals && totals.csat > 0 ? `${totals.csat}%` : 'N/A')}
-            showInfo
-            tooltip={`Caller satisfaction score averaged across daily snapshot rows. Shows N/A when no CSAT data has been recorded for the ${period} window — enable post-call surveys to populate this.`}
-          />
-        </div>
+        {loading ? (
+          <div style={{ marginBottom: 20 }}><KPIGridSkeleton count={5} /></div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+            <BenchKPICard
+              label="# of Calls Auto Resolved"
+              value={resolvedCount.toLocaleString()}
+              showInfo
+              tooltip={`Calls the AI voice agent handled end-to-end without transferring to a human. Formula: total calls × (deflection rate ÷ 100) = ${(totals?.calls ?? 0).toLocaleString()} × ${deflectionRate}% = ${resolvedCount.toLocaleString()} calls for the ${period} window.`}
+            />
+            <BenchKPICard
+              label="Transferred to Live Agent"
+              value={`${totals?.transferRate ?? 0}%`}
+              showInfo
+              tooltip={`Average of daily "Transfer to live agent %" values over the ${period} window. The inverse (100 − this) is the deflection rate — calls the AI agent handled end-to-end without handing off.`}
+            />
+            <BenchKPICard
+              label="Estimated Hours Saved"
+              value={formatHours(hoursSavedCalc)}
+              showInfo
+              tooltip={`Resolved calls × average call duration (seconds) ÷ 3600. ${resolvedCount.toLocaleString()} resolved × ${totals?.avgDuration ?? 0}s avg duration for the ${period} window.`}
+            />
+            <BenchKPICard
+              label="Estimated Revenue Impact"
+              value={formatCurrency(revenueImpactCalc)}
+              showInfo
+              tooltip={`Hours saved × $${REVENUE_PER_HOUR}/hour (loaded labour rate). ${formatHours(hoursSavedCalc)} × $${REVENUE_PER_HOUR} for the ${period} window.`}
+            />
+            <BenchKPICard
+              label="CSAT Score"
+              value={totals && totals.csat > 0 ? `${totals.csat}%` : 'N/A'}
+              showInfo
+              tooltip={`Caller satisfaction score averaged across daily snapshot rows. Shows N/A when no CSAT data has been recorded for the ${period} window — enable post-call surveys to populate this.`}
+            />
+          </div>
+        )}
 
         {/* Area chart */}
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 24 }}>
           <p style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#6a8870', marginBottom: 12 }}>
             Calls Deflected vs Overall Call Volume
           </p>
-          <VolumeChart data={chartData} />
+          <VolumeChart data={chartData} loading={loading} />
         </div>
 
         {/* Section 2 */}

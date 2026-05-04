@@ -142,6 +142,25 @@
 .custom-scroll::-webkit-scrollbar-track { background: transparent; }
 .custom-scroll::-webkit-scrollbar-thumb { background: #1a2c1d; border-radius: 2px; }
 
+/* ── Skeleton loading shimmer ──────────────────── */
+@keyframes skeleton-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    #0d1810 0%,
+    #1a2c1d 40%,
+    #243a28 50%,
+    #1a2c1d 60%,
+    #0d1810 100%
+  );
+  background-size: 800px 100%;
+  animation: skeleton-shimmer 1.8s ease-in-out infinite;
+  border-radius: 6px;
+}
+
 /* ── Period tab active underline ───────────────── */
 .period-tab-active {
   color: #e4ede6;

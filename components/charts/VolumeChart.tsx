@@ -1,6 +1,7 @@
 'use client';
 
 import { useId } from 'react';
+import { ChartSkeleton } from '@/components/Skeleton';
 import {
   AreaChart,
   Area,
@@ -15,6 +16,7 @@ import type { VolumePoint } from '@/lib/types';
 
 interface VolumeChartProps {
   data: VolumePoint[];
+  loading?: boolean;
 }
 
 function CustomTooltip({
@@ -49,8 +51,9 @@ function CustomTooltip({
   );
 }
 
-export function VolumeChart({ data }: VolumeChartProps) {
+export function VolumeChart({ data, loading }: VolumeChartProps) {
   const uid = useId();
+  if (loading) return <ChartSkeleton height={200} />;
   const totalGradId = `totalGrad-${uid}`;
   const resolvedGradId = `resolvedGrad-${uid}`;
 

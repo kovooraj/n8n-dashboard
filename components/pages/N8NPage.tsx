@@ -10,12 +10,13 @@ import { AutomationWorkflowSidebar } from '@/components/AutomationWorkflowSideba
 import { HideCompletedToggle } from '@/components/HideCompletedToggle';
 import type { DashboardPeriod, N8NSnapshot, N8NTotals, SidebarWorkflow, ChartPoint, ClickUpTask, WorkflowHealthData, N8nExecution } from '@/lib/types';
 import { buildSuccessFromBuckets, formatCurrency, formatHours } from '@/lib/chartUtils';
+import { ChartSkeleton, KPIGridSkeleton } from '@/components/Skeleton';
 
 const N8N_BASE_URL = 'https://n8n.sinaprinting.com';
 
 const SuccessChart = dynamic(
   () => import('@/components/charts/SuccessChart').then((m) => m.SuccessChart),
-  { ssr: false, loading: () => <div style={{ height: 200, background: '#0d1810', borderRadius: 8 }} /> }
+  { ssr: false, loading: () => <ChartSkeleton height={200} /> }
 );
 
 const HEALTH_COLOR: Record<string, string> = {
@@ -395,50 +396,54 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
                 )}
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
-                <BenchKPICard
-                  label="Total Automation Triggers"
-                  value={loading ? '—' : (totals?.totalTriggers ?? 0).toLocaleString()}
-                  showInfo
-                  tooltip={period === 'weekly'
-                    ? `Live count from the n8n Executions API — every execution started across all active workflows in the last 7 days, bucketed per day.`
-                    : `Sum of daily execution counts stored in Supabase (n8n-history) across the selected ${period} window. Updated nightly at 2 AM UTC by the daily sync cron.`}
-                />
-                <BenchKPICard
-                  label="Estimated Hours Saved"
-                  value={loading ? '—' : formatHours(totals?.hoursSaved ?? 0)}
-                  showInfo
-                  tooltip={`Calculated from successful executions x 10 min average manual effort saved per run, converted to hours. Formula: successful triggers x 10 min / 60. Summed across the ${period} window.`}
-                />
-                <BenchKPICard
-                  label="Estimated Revenue Impact"
-                  value={loading ? '—' : formatCurrency(totals?.revenueImpact ?? 0)}
-                  showInfo
-                  tooltip={`Labour cost avoided based on hours saved x $20/hr staff rate. Formula: (successful triggers x 10 min / 60) x $20. Summed across the ${period} window.`}
-                />
-                <BenchKPICard
-                  label="Workflows Active"
-                  value={liveLoading ? '—' : (workflows.length || totals?.activeWorkflows || 0)}
-                  showInfo
-                  tooltip={`Live count from the n8n API — every workflow with active=true right now. Health: Healthy = all runs successful in the last 5 days; Warning = recovered (last run OK but there were failures in the last 5 days); Failing = most recent run failed.`}
-                  subBadge={
-                    <span style={{ fontSize: '0.65rem', color: '#6a8870', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3dba62', display: 'inline-block' }} />
-                      {workflows.filter((w) => w.health === 'healthy').length} Healthy
-                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#d4912a', display: 'inline-block', marginLeft: 4 }} />
-                      {warningWorkflows.length} Warning
-                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#e05858', display: 'inline-block', marginLeft: 4 }} />
-                      {failingWorkflows.length} Failing
-                    </span>
-                  }
-                />
-              </div>
+              {loading ? (
+                <div style={{ marginBottom: 20 }}><KPIGridSkeleton count={4} /></div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+                  <BenchKPICard
+                    label="Total Automation Triggers"
+                    value={(totals?.totalTriggers ?? 0).toLocaleString()}
+                    showInfo
+                    tooltip={period === 'weekly'
+                      ? `Live count from the n8n Executions API — every execution started across all active workflows in the last 7 days, bucketed per day.`
+                      : `Sum of daily execution counts stored in Supabase (n8n-history) across the selected ${period} window. Updated nightly at 2 AM UTC by the daily sync cron.`}
+                  />
+                  <BenchKPICard
+                    label="Estimated Hours Saved"
+                    value={formatHours(totals?.hoursSaved ?? 0)}
+                    showInfo
+                    tooltip={`Calculated from successful executions x 10 min average manual effort saved per run, converted to hours. Formula: successful triggers x 10 min / 60. Summed across the ${period} window.`}
+                  />
+                  <BenchKPICard
+                    label="Estimated Revenue Impact"
+                    value={formatCurrency(totals?.revenueImpact ?? 0)}
+                    showInfo
+                    tooltip={`Labour cost avoided based on hours saved x $20/hr staff rate. Formula: (successful triggers x 10 min / 60) x $20. Summed across the ${period} window.`}
+                  />
+                  <BenchKPICard
+                    label="Workflows Active"
+                    value={liveLoading ? '—' : (workflows.length || totals?.activeWorkflows || 0)}
+                    showInfo
+                    tooltip={`Live count from the n8n API — every workflow with active=true right now.`}
+                    subBadge={
+                      <span style={{ fontSize: '0.65rem', color: '#6a8870', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3dba62', display: 'inline-block' }} />
+                        {workflows.filter((w) => w.health === 'healthy').length} Healthy
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#d4912a', display: 'inline-block', marginLeft: 4 }} />
+                        {warningWorkflows.length} Warning
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#e05858', display: 'inline-block', marginLeft: 4 }} />
+                        {failingWorkflows.length} Failing
+                      </span>
+                    }
+                  />
+                </div>
+              )}
 
               <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 28 }}>
                 <p style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#6a8870', marginBottom: 12 }}>
                   Success vs Errors
                 </p>
-                <SuccessChart data={chartData} />
+                <SuccessChart data={chartData} loading={loading} />
               </div>
 
               <SectionHeader eyebrow="2. AUTOMATIONS" title="All Workflows" />

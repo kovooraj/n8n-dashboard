@@ -11,6 +11,7 @@ export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
 const CACHE_REVALIDATE_SEC = 25 * 60 * 60;
+const PERIOD_CACHE_SEC     = 22 * 60 * 60; // non-weekly: recompute ~daily
 const CACHE_TAG = 'intercom-fin';
 
 const AGG_RULES = {
@@ -64,6 +65,43 @@ function remapForChannel(snapshots: RawSnapshot[], channel: ChannelFilter): RawS
   }));
 }
 
+/**
+ * Cache the fully-computed response body for non-weekly periods (~22 hrs).
+ * The cron job's revalidateTag(CACHE_TAG) invalidates this alongside raw data.
+ */
+const getSlowPeriodBody = unstable_cache(
+  async (period: string, channel: string, days: number): Promise<object> => {
+    const now   = new Date();
+    const daily = await getCachedDaily(days);
+    const channelData = remapForChannel(daily, channel as ChannelFilter);
+    const { buckets, totals, granularity } = aggregate(channelData, period as DashboardPeriod, AGG_RULES, now);
+    const bucketPayload = payloadFromBuckets(buckets);
+    const snapshots = [...bucketPayload].reverse();
+    return {
+      snapshots,
+      buckets: bucketPayload,
+      totals: {
+        finInvolvement:    Math.round(totals.finInvolvement ?? 0),
+        finResolved:       Math.round(totals.finResolved ?? 0),
+        finAutomationRate: totals.finInvolvement > 0
+          ? Number(((totals.finResolved / totals.finInvolvement) * 100).toFixed(1))
+          : 0,
+        csat:               Number((totals.csat ?? 0).toFixed(1)),
+        finProcedureUses:   Math.round(totals.finProcedureUses ?? 0),
+        activeFinProcedures:Math.round(totals.activeFinProcedures ?? 0),
+        hoursSaved:         Number((totals.hoursSaved ?? 0).toFixed(2)),
+        revenueImpact:      Number((totals.revenueImpact ?? 0).toFixed(2)),
+      },
+      granularity,
+      channel,
+      mock: false,
+      source: 'intercom',
+    };
+  },
+  ['intercom-fin-period-body'],
+  { revalidate: PERIOD_CACHE_SEC, tags: [CACHE_TAG] },
+);
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const period  = (searchParams.get('period')  ?? 'weekly') as DashboardPeriod;
@@ -82,6 +120,16 @@ export async function GET(request: NextRequest) {
   const isCron = ua.toLowerCase().startsWith('vercel-cron');
   const forceRefresh = isCron || searchParams.get('refresh') === '1';
   if (forceRefresh) revalidateTag(CACHE_TAG, 'max');
+
+  // ── Fast path: serve 22-hour cached body for slow periods (monthly/quarterly/annually) ──
+  if (period !== 'weekly' && !forceRefresh) {
+    try {
+      const body = await getSlowPeriodBody(period, channel, days);
+      return NextResponse.json(body, { headers: { 'Cache-Control': 'no-store' } });
+    } catch {
+      // Fall through to the live path if cache computation fails
+    }
+  }
 
   try {
     const today = todayUTC();

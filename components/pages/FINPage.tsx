@@ -11,10 +11,11 @@ import { HideCompletedToggle } from '@/components/HideCompletedToggle';
 import type { DashboardPeriod, FINSnapshot, FINTotals, ClickUpTask } from '@/lib/types';
 import { buildVolumeFromBuckets, formatCurrency, formatHours } from '@/lib/chartUtils';
 import type { VolumePoint } from '@/lib/types';
+import { ChartSkeleton, KPIGridSkeleton } from '@/components/Skeleton';
 
 const VolumeChart = dynamic(
   () => import('@/components/charts/VolumeChart').then((m) => m.VolumeChart),
-  { ssr: false, loading: () => <div style={{ height: 200, background: '#0d1810', borderRadius: 8 }} /> }
+  { ssr: false, loading: () => <ChartSkeleton height={200} /> }
 );
 
 function SectionHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
@@ -154,39 +155,43 @@ export function FINPage() {
         </div>
 
         {/* KPI cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
-          <BenchKPICard
-            label="Conversations"
-            value={loading ? '—' : (totals?.finInvolvement ?? 0).toLocaleString()}
-            showInfo
-            tooltip={`Count of customer conversations where Intercom FIN engaged. Pulled daily from the Intercom Conversations API and stored in Supabase (intercom-fin). Summed across daily rows in the selected ${period} window.`}
-          />
-          <BenchKPICard
-            label="Estimated Hours Saved"
-            value={loading ? '—' : formatHours(totals?.hoursSaved ?? 0)}
-            showInfo
-            tooltip={`Resolved conversations x 5 min average human handle time saved per resolution, converted to hours. Formula: FIN-resolved x 5 min / 60. Summed over the ${period} window.`}
-          />
-          <BenchKPICard
-            label="Estimated Revenue Impact"
-            value={loading ? '—' : formatCurrency(totals?.revenueImpact ?? 0)}
-            showInfo
-            tooltip={`Hours saved x $20/hr loaded labour rate. Formula: (FIN-resolved x 5 min / 60) x $20. Summed over the ${period} window.`}
-          />
-          <BenchKPICard
-            label="CSAT Score"
-            value={loading ? '—' : `${totals?.csat ?? 0}%`}
-            showInfo
-            tooltip={`Customer satisfaction score averaged across daily snapshot rows stored in Supabase. Source: Intercom post-conversation CSAT ratings, pulled nightly. Only days with actual ratings are included in the average.`}
-          />
-        </div>
+        {loading ? (
+          <div style={{ marginBottom: 20 }}><KPIGridSkeleton count={4} /></div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+            <BenchKPICard
+              label="Conversations"
+              value={(totals?.finInvolvement ?? 0).toLocaleString()}
+              showInfo
+              tooltip={`Count of customer conversations where Intercom FIN engaged. Pulled daily from the Intercom Conversations API and stored in Supabase (intercom-fin). Summed across daily rows in the selected ${period} window.`}
+            />
+            <BenchKPICard
+              label="Estimated Hours Saved"
+              value={formatHours(totals?.hoursSaved ?? 0)}
+              showInfo
+              tooltip={`Resolved conversations x 5 min average human handle time saved per resolution, converted to hours. Formula: FIN-resolved x 5 min / 60. Summed over the ${period} window.`}
+            />
+            <BenchKPICard
+              label="Estimated Revenue Impact"
+              value={formatCurrency(totals?.revenueImpact ?? 0)}
+              showInfo
+              tooltip={`Hours saved x $20/hr loaded labour rate. Formula: (FIN-resolved x 5 min / 60) x $20. Summed over the ${period} window.`}
+            />
+            <BenchKPICard
+              label="CSAT Score"
+              value={`${totals?.csat ?? 0}%`}
+              showInfo
+              tooltip={`Customer satisfaction score averaged across daily snapshot rows stored in Supabase. Source: Intercom post-conversation CSAT ratings, pulled nightly. Only days with actual ratings are included in the average.`}
+            />
+          </div>
+        )}
 
         {/* Area chart */}
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 16, marginBottom: 24 }}>
           <p style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#6a8870', marginBottom: 12 }}>
             Volume of Resolved vs Overall Volume
           </p>
-          <VolumeChart data={chartData} />
+          <VolumeChart data={chartData} loading={loading} />
         </div>
 
         {/* Section 2 */}

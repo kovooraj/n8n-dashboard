@@ -11,9 +11,11 @@ import {
   Legend,
 } from 'recharts';
 import type { ChartPoint } from '@/lib/types';
+import { ChartSkeleton } from '@/components/Skeleton';
 
 interface SuccessChartProps {
   data: ChartPoint[];
+  loading?: boolean;
 }
 
 function CustomTooltip({
@@ -48,7 +50,8 @@ function CustomTooltip({
   );
 }
 
-export function SuccessChart({ data }: SuccessChartProps) {
+export function SuccessChart({ data, loading }: SuccessChartProps) {
+  if (loading) return <ChartSkeleton height={200} />;
   return (
     <ResponsiveContainer width="100%" height={200}>
       <LineChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: data.length > 7 ? 20 : 4 }}>

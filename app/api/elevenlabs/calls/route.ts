@@ -9,6 +9,7 @@ export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
 const CACHE_REVALIDATE_SEC = 25 * 60 * 60;
+const PERIOD_CACHE_SEC     = 22 * 60 * 60;
 const CACHE_TAG = 'elevenlabs-calls';
 
 const AGG_RULES = {
@@ -36,6 +37,35 @@ const getCachedDaily = unstable_cache(
   { revalidate: CACHE_REVALIDATE_SEC, tags: [CACHE_TAG] },
 );
 
+/** Cache the fully-computed response body for non-weekly periods (~22 hrs). */
+const getSlowPeriodBody = unstable_cache(
+  async (period: string, days: number): Promise<object> => {
+    const now   = new Date();
+    const daily = await getCachedDaily(days);
+    const { buckets, totals, granularity } = aggregate(daily, period as DashboardPeriod, AGG_RULES, now);
+    const bucketPayload = payloadFromBuckets(buckets);
+    const snapshots = [...bucketPayload].reverse();
+    return {
+      snapshots,
+      buckets: bucketPayload,
+      totals: {
+        calls:        Math.round(totals.calls ?? 0),
+        avgDuration:  Number((totals.avgDuration  ?? 0).toFixed(1)),
+        transferRate: Number((totals.transferRate ?? 0).toFixed(1)),
+        agents:       Math.round(totals.agents ?? 0),
+        csat:         Number((totals.csat         ?? 0).toFixed(1)),
+        hoursSaved:   Number((totals.hoursSaved   ?? 0).toFixed(2)),
+        revenueImpact:Number((totals.revenueImpact?? 0).toFixed(2)),
+      },
+      granularity,
+      mock: false,
+      source: 'elevenlabs',
+    };
+  },
+  ['elevenlabs-calls-period-body'],
+  { revalidate: PERIOD_CACHE_SEC, tags: [CACHE_TAG] },
+);
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const period = (searchParams.get('period') ?? 'weekly') as DashboardPeriod;
@@ -53,6 +83,16 @@ export async function GET(request: NextRequest) {
   const isCron = ua.toLowerCase().startsWith('vercel-cron');
   const forceRefresh = isCron || searchParams.get('refresh') === '1';
   if (forceRefresh) revalidateTag(CACHE_TAG, 'max');
+
+  // ── Fast path: serve cached body for slow periods ──
+  if (period !== 'weekly' && !forceRefresh) {
+    try {
+      const body = await getSlowPeriodBody(period, days);
+      return NextResponse.json(body, { headers: { 'Cache-Control': 'no-store' } });
+    } catch {
+      // Fall through to live path
+    }
+  }
 
   try {
     const today = todayUTC();
