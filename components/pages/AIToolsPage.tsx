@@ -514,21 +514,24 @@ export function AIToolsPage() {
         <p style={{ fontSize: '0.75rem', color: '#6a8870', marginBottom: 16, lineHeight: 1.5 }}>
           Assign departments and companies for every person across Claude and ChatGPT. Changes apply to all department breakdowns — saved to Supabase, no deploy needed.
         </p>
+        {/* Roster table — rows inlined in map() to avoid nested-component remount on every keystroke */}
         {(() => {
-          // People in ChatGPT who are not in the static TEAM list
           const teamEmailSet = new Set(TEAM.map((m) => m.email.toLowerCase()));
-          const chatgptOnly = chatgptUsers.filter((u) => !teamEmailSet.has(u.email.toLowerCase()) && u.messages > 0);
+          const chatgptOnly  = chatgptUsers.filter((u) => !teamEmailSet.has(u.email.toLowerCase()) && u.messages > 0);
+          const totalRows    = TEAM.length + chatgptOnly.length;
 
-          function RosterRow({ email, name, defaultDept, defaultCompanies, isTeamMember, isLast }: {
-            email: string; name: string; defaultDept: string; defaultCompanies: Company[];
-            isTeamMember: boolean; isLast: boolean;
-          }) {
-            const saved = rosterOverrides[email];
-            const edit  = rosterEdits[email] ?? { department: defaultDept, companies: defaultCompanies };
-            const isDirty = JSON.stringify(rosterEdits[email]) !== JSON.stringify(rosterOverrides[email]);
+          const renderRow = (
+            email: string, name: string,
+            defaultDept: string, defaultCompanies: Company[],
+            isTeamMember: boolean, rowIndex: number,
+          ) => {
+            const saved       = rosterOverrides[email];
+            const edit        = rosterEdits[email] ?? { department: defaultDept, companies: defaultCompanies };
+            const isDirty     = JSON.stringify(rosterEdits[email]) !== JSON.stringify(rosterOverrides[email]);
             const isOverridden = !!saved;
+            const isLast      = rowIndex === totalRows - 1;
             return (
-              <div style={{
+              <div key={email} style={{
                 display: 'grid', gridTemplateColumns: '1.8fr 1.4fr 1fr 80px',
                 padding: '10px 16px', alignItems: 'center',
                 borderBottom: isLast ? 'none' : '1px solid #1a2c1d',
@@ -544,7 +547,10 @@ export function AIToolsPage() {
                 </div>
                 <input
                   value={edit.department}
-                  onChange={(e) => setRosterEdits((prev) => ({ ...prev, [email]: { ...edit, department: e.target.value } }))}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setRosterEdits((prev) => ({ ...prev, [email]: { ...(prev[email] ?? { department: defaultDept, companies: defaultCompanies }), department: val } }));
+                  }}
                   style={{
                     background: '#0a1410', border: `1px solid ${isDirty ? 'rgba(212,145,42,0.4)' : '#1a2c1d'}`,
                     borderRadius: 4, color: '#e4ede6', fontSize: '0.78rem',
@@ -554,12 +560,15 @@ export function AIToolsPage() {
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                   {(['sinalite', 'willowpack'] as Company[]).map((c) => {
                     const active = edit.companies.includes(c);
-                    const col = c === 'sinalite' ? '#3dba62' : '#4a9eca';
+                    const col    = c === 'sinalite' ? '#3dba62' : '#4a9eca';
                     return (
                       <button key={c} onClick={() => {
-                        const next = active ? edit.companies.filter((x) => x !== c) : [...edit.companies, c];
-                        if (next.length === 0) return;
-                        setRosterEdits((prev) => ({ ...prev, [email]: { ...edit, companies: next as Company[] } }));
+                        setRosterEdits((prev) => {
+                          const cur = prev[email] ?? { department: defaultDept, companies: defaultCompanies };
+                          const next = active ? cur.companies.filter((x) => x !== c) : [...cur.companies, c];
+                          if (next.length === 0) return prev;
+                          return { ...prev, [email]: { ...cur, companies: next as Company[] } };
+                        });
                       }} style={{
                         padding: '2px 7px', borderRadius: 4, cursor: 'pointer',
                         background: active ? `${col}20` : 'transparent',
@@ -581,12 +590,7 @@ export function AIToolsPage() {
                 >Reset</button>
               </div>
             );
-          }
-
-          const allRows = [
-            ...TEAM.map((m) => ({ email: m.email.toLowerCase(), name: m.name, defaultDept: m.department, defaultCompanies: m.companies, isTeamMember: true })),
-            ...chatgptOnly.map((u) => ({ email: u.email.toLowerCase(), name: u.name, defaultDept: 'Unmapped', defaultCompanies: ['sinalite', 'willowpack'] as Company[], isTeamMember: false })),
-          ];
+          };
 
           return (
             <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 14 }}>
@@ -595,13 +599,7 @@ export function AIToolsPage() {
                   <span key={idx} style={{ fontSize: '0.6rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
                 ))}
               </div>
-              {/* Team members section */}
-              {TEAM.map((m, i) => (
-                <RosterRow key={m.email.toLowerCase()} email={m.email.toLowerCase()} name={m.name}
-                  defaultDept={m.department} defaultCompanies={m.companies} isTeamMember={true}
-                  isLast={i === allRows.length - 1} />
-              ))}
-              {/* ChatGPT-only users */}
+              {TEAM.map((m, i) => renderRow(m.email.toLowerCase(), m.name, m.department, m.companies, true, i))}
               {chatgptOnly.length > 0 && (
                 <>
                   <div style={{ padding: '6px 16px', background: 'rgba(16,163,127,0.06)', borderTop: '1px solid rgba(16,163,127,0.2)', borderBottom: '1px solid rgba(16,163,127,0.2)' }}>
@@ -609,11 +607,7 @@ export function AIToolsPage() {
                       ChatGPT users not in static roster ({chatgptOnly.length})
                     </span>
                   </div>
-                  {chatgptOnly.map((u, i) => (
-                    <RosterRow key={u.email.toLowerCase()} email={u.email.toLowerCase()} name={u.name}
-                      defaultDept="Unmapped" defaultCompanies={['sinalite', 'willowpack']} isTeamMember={false}
-                      isLast={i === chatgptOnly.length - 1} />
-                  ))}
+                  {chatgptOnly.map((u, i) => renderRow(u.email.toLowerCase(), u.name, 'Unmapped', ['sinalite', 'willowpack'], false, TEAM.length + i))}
                 </>
               )}
               {chatgptOnly.length === 0 && !chatgptConnected && (
