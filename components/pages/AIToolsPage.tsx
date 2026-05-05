@@ -1121,8 +1121,64 @@ export function AIToolsPage() {
           />
         </div>
 
+        {/* Department breakdown */}
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 20 }}>
+          <div>
+            <p className="section-eyebrow" style={{ marginBottom: 6 }}>2. DEPARTMENTS</p>
+            <h2 style={{ fontSize: '1.75rem', fontWeight: 600, color: '#e4ede6', margin: 0 }}>Usage by department</h2>
+          </div>
+          <button onClick={() => setTool('all')} style={{
+            fontSize: '0.68rem', fontWeight: 600, color: '#6a8870', background: 'transparent',
+            border: '1px solid #1a2c1d', borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
+            letterSpacing: '0.06em', textTransform: 'uppercase', flexShrink: 0,
+          }}>Manage roster →</button>
+        </div>
+        <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 0.7fr 1fr 1.8fr 1.4fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
+            {['Department', 'Users', 'Messages', 'Share', 'Top user'].map((h) => (
+              <span key={h} style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
+            ))}
+          </div>
+
+          {chatgptLoading && (
+            <div style={{ padding: 24, textAlign: 'center' }}>
+              <p style={{ fontSize: '0.8rem', color: '#6a8870' }}>Loading…</p>
+            </div>
+          )}
+
+          {!chatgptLoading && chatgptDepts.length === 0 && (
+            <div style={{ padding: 24, textAlign: 'center' }}>
+              <p style={{ fontSize: '0.8rem', color: '#6a8870' }}>
+                {chatgptError ? `Error: ${chatgptError}` : 'No department data — connect ChatGPT Enterprise to populate this table.'}
+              </p>
+            </div>
+          )}
+
+          {chatgptDepts.map((d, i) => {
+            const pct = (d.messages / maxChatGPTDeptMessages) * 100;
+            return (
+              <div key={d.department} style={{
+                display: 'grid', gridTemplateColumns: '1.6fr 0.7fr 1fr 1.8fr 1.4fr',
+                padding: '12px 16px', alignItems: 'center',
+                borderBottom: i < chatgptDepts.length - 1 ? '1px solid #1a2c1d' : 'none',
+              }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#e4ede6' }}>{d.department}</span>
+                <span style={{ fontSize: '0.85rem', color: '#8aad90' }}>{d.users}</span>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#e4ede6' }}>{d.messages.toLocaleString()}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 1, height: 6, background: '#112014', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: '#10a37f' }} />
+                  </div>
+                  <span style={{ fontSize: '0.7rem', color: '#6a8870', width: 36, textAlign: 'right' }}>{Math.round(pct)}%</span>
+                </div>
+                <span style={{ fontSize: '0.8rem', color: '#8aad90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topUser}</span>
+              </div>
+            );
+          })}
+        </div>
+
         {/* Per-user leaderboard */}
-        <SectionHeader eyebrow="2. LEADERBOARD" title="Usage by team member" />
+        <SectionHeader eyebrow="3. LEADERBOARD" title="Usage by team member" />
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 24 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '48px 1.6fr 1.4fr 1fr 1fr 1.8fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
             {['#', 'Name', 'Email', 'Messages', 'Hours Saved', 'Share'].map((h) => (
@@ -1171,62 +1227,6 @@ export function AIToolsPage() {
                   </div>
                   <span style={{ fontSize: '0.7rem', color: '#6a8870', width: 36, textAlign: 'right' }}>{Math.round(pct)}%</span>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Department breakdown */}
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 20 }}>
-          <div>
-            <p className="section-eyebrow" style={{ marginBottom: 6 }}>3. DEPARTMENTS</p>
-            <h2 style={{ fontSize: '1.75rem', fontWeight: 600, color: '#e4ede6', margin: 0 }}>Usage by department</h2>
-          </div>
-          <button onClick={() => setTool('all')} style={{
-            fontSize: '0.68rem', fontWeight: 600, color: '#6a8870', background: 'transparent',
-            border: '1px solid #1a2c1d', borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
-            letterSpacing: '0.06em', textTransform: 'uppercase', flexShrink: 0,
-          }}>Manage roster →</button>
-        </div>
-        <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 24 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 0.7fr 1fr 1.8fr 1.4fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
-            {['Department', 'Users', 'Messages', 'Share', 'Top user'].map((h) => (
-              <span key={h} style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
-            ))}
-          </div>
-
-          {chatgptLoading && (
-            <div style={{ padding: 24, textAlign: 'center' }}>
-              <p style={{ fontSize: '0.8rem', color: '#6a8870' }}>Loading…</p>
-            </div>
-          )}
-
-          {!chatgptLoading && chatgptDepts.length === 0 && (
-            <div style={{ padding: 24, textAlign: 'center' }}>
-              <p style={{ fontSize: '0.8rem', color: '#6a8870' }}>
-                {chatgptError ? `Error: ${chatgptError}` : 'No department data — connect ChatGPT Enterprise to populate this table.'}
-              </p>
-            </div>
-          )}
-
-          {chatgptDepts.map((d, i) => {
-            const pct = (d.messages / maxChatGPTDeptMessages) * 100;
-            return (
-              <div key={d.department} style={{
-                display: 'grid', gridTemplateColumns: '1.6fr 0.7fr 1fr 1.8fr 1.4fr',
-                padding: '12px 16px', alignItems: 'center',
-                borderBottom: i < chatgptDepts.length - 1 ? '1px solid #1a2c1d' : 'none',
-              }}>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#e4ede6' }}>{d.department}</span>
-                <span style={{ fontSize: '0.85rem', color: '#8aad90' }}>{d.users}</span>
-                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#e4ede6' }}>{d.messages.toLocaleString()}</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{ flex: 1, height: 6, background: '#112014', borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{ width: `${pct}%`, height: '100%', background: '#10a37f' }} />
-                  </div>
-                  <span style={{ fontSize: '0.7rem', color: '#6a8870', width: 36, textAlign: 'right' }}>{Math.round(pct)}%</span>
-                </div>
-                <span style={{ fontSize: '0.8rem', color: '#8aad90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topUser}</span>
               </div>
             );
           })}
