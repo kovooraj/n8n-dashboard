@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
  * Shape stored: Record<email, { department: string; companies: Company[] }>
  */
 const OVERRIDE_SOURCE = 'team-overrides';
-const OVERRIDE_DATE   = '0000-01-01';   // sentinel — never conflicts with real dates
+const OVERRIDE_DATE   = '1970-01-01';   // sentinel — never conflicts with real dashboard dates
 
 export interface MemberOverride {
   department: string;

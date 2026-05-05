@@ -48,7 +48,7 @@ export async function writePayload(source: string, date: string, payload: unknow
       [{ date, source, metrics: {}, payload, synced_at: new Date().toISOString() }],
       { onConflict: 'date,source' },
     );
-  if (error) console.error(`DB payload write error [${source}]:`, error.message);
+  if (error) throw new Error(`DB payload write error [${source}]: ${error.message}`);
 }
 
 /** Read a full JSON payload stored by writePayload. Returns null if not found. */
