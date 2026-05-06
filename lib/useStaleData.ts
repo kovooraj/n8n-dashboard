@@ -7,7 +7,7 @@ import { useState, useEffect, useRef } from 'react';
  * every browser's localStorage cache is automatically invalidated on
  * the next page load — preventing stale computed values from being shown.
  */
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 interface StaleState<T> {
   data: T | null;

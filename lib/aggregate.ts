@@ -52,7 +52,7 @@ export function fiscalQuarterStart(ref: Date): Date {
   ));
 }
 
-export type Granularity = 'day' | 'week' | 'month';
+export type Granularity = 'day' | 'week' | 'month' | 'quarter';
 export type SourceGranularity = 'daily' | 'weekly';
 
 export interface RawSnapshot {
@@ -73,7 +73,8 @@ export interface Bucket {
 export function periodBucketGranularity(period: DashboardPeriod): Granularity {
   if (period === 'weekly') return 'day';
   if (period === 'monthly') return 'week';
-  return 'month'; // quarterly + annually
+  if (period === 'quarterly') return 'month';
+  return 'quarter'; // annually → 4 fiscal quarter buckets
 }
 
 /** Number of buckets expected for a period (approximate; monthly is dynamic). */
@@ -81,8 +82,8 @@ export function periodBucketCount(period: DashboardPeriod): number {
   switch (period) {
     case 'weekly': return 7;
     case 'monthly': return 5; // calendar month has 4–5 ISO weeks
-    case 'quarterly': return 3;
-    case 'annually': return 12;
+    case 'quarterly': return 6; // previous fiscal quarter + current fiscal quarter
+    case 'annually': return 4; // 4 fiscal quarter buckets
   }
 }
 
@@ -188,10 +189,13 @@ export function buildBucketRange(period: DashboardPeriod, now: Date = new Date()
       ws.setUTCDate(ws.getUTCDate() + 7);
     }
   } else if (period === 'quarterly') {
-    // 3 months of the current fiscal quarter (Q1=Aug–Oct, Q2=Nov–Jan, Q3=Feb–Apr, Q4=May–Jul)
+    // Previous fiscal quarter + current fiscal quarter (6 monthly buckets total)
+    // This ensures quarterly always has more data than monthly (monthly ≈ 5 weeks).
     const qStart = fiscalQuarterStart(today);
-    for (let i = 0; i < 3; i++) {
-      const ms = new Date(Date.UTC(qStart.getUTCFullYear(), qStart.getUTCMonth() + i, 1));
+    // Previous Q starts 3 months before current Q start
+    const prevQStart = new Date(Date.UTC(qStart.getUTCFullYear(), qStart.getUTCMonth() - 3, 1));
+    for (let i = 0; i < 6; i++) {
+      const ms = new Date(Date.UTC(prevQStart.getUTCFullYear(), prevQStart.getUTCMonth() + i, 1));
       const me = new Date(Date.UTC(ms.getUTCFullYear(), ms.getUTCMonth() + 1, 0));
       buckets.push({
         id: `${ms.getUTCFullYear()}-${pad(ms.getUTCMonth() + 1)}`,
@@ -202,17 +206,21 @@ export function buildBucketRange(period: DashboardPeriod, now: Date = new Date()
       });
     }
   } else {
-    // annually — 12 months of the current fiscal year (Aug → Jul)
+    // annually — 4 fiscal quarter buckets (Q1=Aug–Oct, Q2=Nov–Jan, Q3=Feb–Apr, Q4=May–Jul)
     const fyStart = fiscalYearStart(today);
-    for (let i = 0; i < 12; i++) {
-      const ms = new Date(Date.UTC(fyStart.getUTCFullYear(), fyStart.getUTCMonth() + i, 1));
-      const me = new Date(Date.UTC(ms.getUTCFullYear(), ms.getUTCMonth() + 1, 0));
+    const fyYear = fyStart.getUTCFullYear();
+    const qNames = ['Q1', 'Q2', 'Q3', 'Q4'] as const;
+    for (let q = 0; q < 4; q++) {
+      const ms = new Date(Date.UTC(fyStart.getUTCFullYear(), fyStart.getUTCMonth() + q * 3, 1));
+      const me = new Date(Date.UTC(fyStart.getUTCFullYear(), fyStart.getUTCMonth() + (q + 1) * 3, 0));
+      const startMo = MONTH_SHORT[ms.getUTCMonth()];
+      const endMo = MONTH_SHORT[me.getUTCMonth()];
       buckets.push({
-        id: `${ms.getUTCFullYear()}-${pad(ms.getUTCMonth() + 1)}`,
+        id: `${qNames[q]}-${fyYear}`,
         start: ms,
         end: me,
-        label: MONTH_SHORT[ms.getUTCMonth()],
-        longLabel: `${MONTH_SHORT[ms.getUTCMonth()]} ${ms.getUTCFullYear()}`,
+        label: qNames[q],
+        longLabel: `${qNames[q]} · ${startMo}–${endMo} FY${fyYear}`,
       });
     }
   }
@@ -231,6 +239,14 @@ function bucketKeyFor(snapDate: Date, gran: Granularity): string {
   const d = startOfDay(snapDate);
   if (gran === 'day') return toISO(d);
   if (gran === 'week') return toISO(startOfISOWeek(d));
+  if (gran === 'quarter') {
+    // Map date to its fiscal quarter bucket id: Q1-YYYY … Q4-YYYY
+    const fyStart = fiscalYearStart(d);
+    const monthsIntoFY = (d.getUTCFullYear() - fyStart.getUTCFullYear()) * 12
+      + (d.getUTCMonth() - fyStart.getUTCMonth());
+    const qi = Math.floor(Math.max(0, monthsIntoFY) / 3); // 0..3
+    return `Q${qi + 1}-${fyStart.getUTCFullYear()}`;
+  }
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
 }
 
