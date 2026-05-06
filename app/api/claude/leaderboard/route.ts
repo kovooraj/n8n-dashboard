@@ -34,7 +34,7 @@ function startDate(period: DashboardPeriod): string {
   switch (period) {
     case 'weekly':    days = 7;   break;
     case 'monthly':   days = 30;  break;
-    case 'quarterly': days = 190; break; // prev Q (3 mo) + current Q (3 mo) = ~6 months
+    case 'quarterly': days = 125; break;
     case 'annually':  days = 365; break;
   }
   const d = new Date(now.getTime() - days * 86400 * 1000);

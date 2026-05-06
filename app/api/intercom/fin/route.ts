@@ -29,7 +29,7 @@ function lookbackDays(period: DashboardPeriod): number {
   switch (period) {
     case 'weekly': return 10;
     case 'monthly': return 35;
-    case 'quarterly': return 190; // prev Q (3 mo) + current Q (3 mo) = ~6 months
+    case 'quarterly': return 125;
     case 'annually': return 380;
   }
 }

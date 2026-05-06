@@ -82,7 +82,7 @@ export function periodBucketCount(period: DashboardPeriod): number {
   switch (period) {
     case 'weekly': return 7;
     case 'monthly': return 5; // calendar month has 4–5 ISO weeks
-    case 'quarterly': return 6; // previous fiscal quarter + current fiscal quarter
+    case 'quarterly': return 3; // 3 months of the current fiscal quarter
     case 'annually': return 4; // 4 fiscal quarter buckets
   }
 }
@@ -189,13 +189,10 @@ export function buildBucketRange(period: DashboardPeriod, now: Date = new Date()
       ws.setUTCDate(ws.getUTCDate() + 7);
     }
   } else if (period === 'quarterly') {
-    // Previous fiscal quarter + current fiscal quarter (6 monthly buckets total)
-    // This ensures quarterly always has more data than monthly (monthly ≈ 5 weeks).
+    // 3 months of the current fiscal quarter (Q1=Aug–Oct, Q2=Nov–Jan, Q3=Feb–Apr, Q4=May–Jul)
     const qStart = fiscalQuarterStart(today);
-    // Previous Q starts 3 months before current Q start
-    const prevQStart = new Date(Date.UTC(qStart.getUTCFullYear(), qStart.getUTCMonth() - 3, 1));
-    for (let i = 0; i < 6; i++) {
-      const ms = new Date(Date.UTC(prevQStart.getUTCFullYear(), prevQStart.getUTCMonth() + i, 1));
+    for (let i = 0; i < 3; i++) {
+      const ms = new Date(Date.UTC(qStart.getUTCFullYear(), qStart.getUTCMonth() + i, 1));
       const me = new Date(Date.UTC(ms.getUTCFullYear(), ms.getUTCMonth() + 1, 0));
       buckets.push({
         id: `${ms.getUTCFullYear()}-${pad(ms.getUTCMonth() + 1)}`,
