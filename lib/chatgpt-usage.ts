@@ -2,8 +2,8 @@ import 'server-only';
 import type { DashboardPeriod } from './types';
 
 // Business-impact constants
-// 15 messages = 5 min of manual work saved → 180 msgs/hr
-const MESSAGES_PER_HOUR = 180;
+// 15 messages = 1 hour of manual work saved → 15 msgs/hr
+const MESSAGES_PER_HOUR = 15;
 const REVENUE_PER_HOUR  = 20;
 
 // ── Types ─────────────────────────────────────────────────────────────────────

@@ -1105,13 +1105,13 @@ export function AIToolsPage() {
             label="Est. Hours Saved"
             value={chatgptLoading ? '—' : formatHours(chatgptTotals?.hoursSaved ?? 0)}
             showInfo
-            tooltip="15 messages = 5 minutes of equivalent manual effort saved. Formula: messages ÷ 180."
+            tooltip="15 messages = 1 hour of manual effort saved. Formula: messages ÷ 15."
           />
           <BenchKPICard
             label="Est. Value"
             value={chatgptLoading ? '—' : formatCurrency(chatgptTotals?.revenueImpact ?? 0)}
             showInfo
-            tooltip="Hours saved × $20/hr. Approximation based on 15 msgs = 5 min of work at $20/hr labour rate."
+            tooltip="Hours saved × $20/hr. Based on 15 messages = 1 hour of manual effort at $20/hr labour rate."
           />
         </div>
 
@@ -1228,7 +1228,7 @@ export function AIToolsPage() {
 
         <p style={{ fontSize: '0.7rem', color: '#6a8870', lineHeight: 1.5 }}>
           Source: ChatGPT Enterprise workspace analytics (chatgpt.com/admin/usage) ·
-          Est. value = messages ÷ 180 hrs × $20/hr · session token refreshes monthly.
+          Est. value = messages ÷ 15 hrs × $20/hr · session token refreshes monthly.
           Department attribution uses the team roster — unmapped users appear under &quot;Unmapped&quot;.
         </p>
       </>
