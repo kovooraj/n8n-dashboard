@@ -7,7 +7,7 @@
  * Bucket granularity per period:
  *   weekly     → day   (last 7 days)
  *   monthly    → week  (weeks within current calendar month — 4 or 5 weeks)
- *   quarterly  → month (last 4 calendar months rolling)
+ *   quarterly  → month (3 months of the current fiscal quarter)
  *   annually   → month (current fiscal year — 12 months starting August)
  *
  * Fiscal year starts in August. Fiscal quarters:
@@ -81,7 +81,7 @@ export function periodBucketCount(period: DashboardPeriod): number {
   switch (period) {
     case 'weekly': return 7;
     case 'monthly': return 5; // calendar month has 4–5 ISO weeks
-    case 'quarterly': return 4;
+    case 'quarterly': return 3;
     case 'annually': return 12;
   }
 }
@@ -188,10 +188,10 @@ export function buildBucketRange(period: DashboardPeriod, now: Date = new Date()
       ws.setUTCDate(ws.getUTCDate() + 7);
     }
   } else if (period === 'quarterly') {
-    // Last 4 calendar months rolling (ending with the current month)
-    const thisMonthStart = startOfMonth(today);
-    for (let i = 3; i >= 0; i--) {
-      const ms = new Date(Date.UTC(thisMonthStart.getUTCFullYear(), thisMonthStart.getUTCMonth() - i, 1));
+    // 3 months of the current fiscal quarter (Q1=Aug–Oct, Q2=Nov–Jan, Q3=Feb–Apr, Q4=May–Jul)
+    const qStart = fiscalQuarterStart(today);
+    for (let i = 0; i < 3; i++) {
+      const ms = new Date(Date.UTC(qStart.getUTCFullYear(), qStart.getUTCMonth() + i, 1));
       const me = new Date(Date.UTC(ms.getUTCFullYear(), ms.getUTCMonth() + 1, 0));
       buckets.push({
         id: `${ms.getUTCFullYear()}-${pad(ms.getUTCMonth() + 1)}`,
