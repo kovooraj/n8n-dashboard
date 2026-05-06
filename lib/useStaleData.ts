@@ -2,6 +2,13 @@
 
 import { useState, useEffect, useRef } from 'react';
 
+/**
+ * Bump this integer whenever a server-side calculation changes so that
+ * every browser's localStorage cache is automatically invalidated on
+ * the next page load — preventing stale computed values from being shown.
+ */
+const CACHE_VERSION = 2;
+
 interface StaleState<T> {
   data: T | null;
   loading: boolean;   // true only on first load with no cached data
@@ -42,7 +49,7 @@ export function useStaleData<T>(
     // Immediately serve stale data from localStorage (if available for this key)
     if (!isRefresh) {
       try {
-        const raw = localStorage.getItem(`swr:${cacheKey}`);
+        const raw = localStorage.getItem(`swr_v${CACHE_VERSION}:${cacheKey}`);
         if (raw) {
           const cached = JSON.parse(raw) as { data: T };
           setData(cached.data);
@@ -68,7 +75,7 @@ export function useStaleData<T>(
         setRefreshing(false);
         setError(null);
         try {
-          localStorage.setItem(`swr:${cacheKey}`, JSON.stringify({ data: fresh }));
+          localStorage.setItem(`swr_v${CACHE_VERSION}:${cacheKey}`, JSON.stringify({ data: fresh }));
         } catch { /* ignore quota errors */ }
       })
       .catch((err: unknown) => {
