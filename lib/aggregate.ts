@@ -152,6 +152,9 @@ export function buildBucketRange(period: DashboardPeriod, now: Date = new Date()
   const count = periodBucketCount(period);
 
   const buckets: BucketRange['buckets'] = [];
+  // For monthly, clamp rangeStart to the 1st of the month so snapshots
+  // from prior-month ISO-week overlap days are excluded from aggregation.
+  let dataRangeStart: Date | null = null;
 
   if (gran === 'day') {
     // Last `count` days ending today
@@ -169,9 +172,11 @@ export function buildBucketRange(period: DashboardPeriod, now: Date = new Date()
     }
   } else if (gran === 'week') {
     // ISO weeks that overlap the current calendar month.
-    // Start from the Monday on/before the 1st of the month; stop when the
-    // week-start is past the last day of the month.
+    // Buckets start at the ISO-week boundary (Monday before the 1st) so
+    // week labels are correct, but rangeStart is clamped to the 1st of the
+    // month so no prior-month data leaks into the totals.
     const monthStart = startOfMonth(today);
+    dataRangeStart = monthStart; // clamp: only count data from the 1st
     const monthEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0));
     let ws = startOfISOWeek(monthStart);
     while (ws <= monthEnd) {
@@ -189,12 +194,11 @@ export function buildBucketRange(period: DashboardPeriod, now: Date = new Date()
       ws.setUTCDate(ws.getUTCDate() + 7);
     }
   } else if (period === 'quarterly') {
-    // Rolling last 3 calendar months (2 months ago + last month + current month).
-    // This ensures quarterly always has ~3× more data than monthly and the
-    // hierarchy holds: weekly ⊂ monthly ⊂ quarterly ⊂ annually.
-    for (let i = 2; i >= 0; i--) {
-      const ms = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - i, 1));
-      const me = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - i + 1, 0));
+    // 3 months of the current fiscal quarter (Q1=Aug–Oct, Q2=Nov–Jan, Q3=Feb–Apr, Q4=May–Jul)
+    const qStart = fiscalQuarterStart(today);
+    for (let i = 0; i < 3; i++) {
+      const ms = new Date(Date.UTC(qStart.getUTCFullYear(), qStart.getUTCMonth() + i, 1));
+      const me = new Date(Date.UTC(ms.getUTCFullYear(), ms.getUTCMonth() + 1, 0));
       buckets.push({
         id: `${ms.getUTCFullYear()}-${pad(ms.getUTCMonth() + 1)}`,
         start: ms,
@@ -224,7 +228,7 @@ export function buildBucketRange(period: DashboardPeriod, now: Date = new Date()
   }
 
   return {
-    rangeStart: buckets[0].start,
+    rangeStart: dataRangeStart ?? buckets[0].start,
     rangeEnd: buckets[buckets.length - 1].end,
     buckets,
   };

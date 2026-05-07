@@ -35,7 +35,7 @@ function lookbackDays(period: DashboardPeriod): number {
   switch (period) {
     case 'weekly':    return 7;
     case 'monthly':   return 30;
-    case 'quarterly': return 95; // rolling 3 calendar months
+    case 'quarterly': return 125;
     case 'annually':  return 365;
   }
 }
