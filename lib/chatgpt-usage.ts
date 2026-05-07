@@ -63,10 +63,15 @@ function dateRange(period: DashboardPeriod): { startDate: string; endDate: strin
 
 // ── Auth — exchange long-lived session token for a short-lived Bearer JWT ─────
 
-async function getAccessToken(sessionToken: string): Promise<string> {
+async function getAccessToken(sessionToken: string, sessionToken1?: string): Promise<string> {
+  // Next-Auth chunks large session cookies into .0 and .1 parts — send both when available.
+  // CHATGPT_SESSION_TOKEN = value of __Secure-next-auth.session-token.0
+  // CHATGPT_SESSION_TOKEN_1 = value of __Secure-next-auth.session-token.1
+  const cookieParts = [`__Secure-next-auth.session-token.0=${sessionToken}`];
+  if (sessionToken1) cookieParts.push(`__Secure-next-auth.session-token.1=${sessionToken1}`);
   const resp = await fetch('https://chatgpt.com/api/auth/session', {
     headers: {
-      cookie: `__Secure-next-auth.session-token=${sessionToken}`,
+      cookie: cookieParts.join('; '),
       accept: 'application/json',
       'user-agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
@@ -199,15 +204,16 @@ async function fetchUserStats(
 // ── Public entry point ────────────────────────────────────────────────────────
 
 export async function fetchChatGPTPayload(period: DashboardPeriod): Promise<ChatGPTPayload> {
-  const sessionToken = process.env.CHATGPT_SESSION_TOKEN;
-  const accountId    = process.env.CHATGPT_ACCOUNT_ID;
+  const sessionToken  = process.env.CHATGPT_SESSION_TOKEN;
+  const sessionToken1 = process.env.CHATGPT_SESSION_TOKEN_1; // optional chunked second part
+  const accountId     = process.env.CHATGPT_ACCOUNT_ID;
 
   if (!sessionToken || !accountId) {
     throw new Error('CHATGPT_SESSION_TOKEN and CHATGPT_ACCOUNT_ID must be set in Vercel env vars');
   }
 
   const { startDate, endDate } = dateRange(period);
-  const accessToken = await getAccessToken(sessionToken);
+  const accessToken = await getAccessToken(sessionToken, sessionToken1);
 
   const [users, stats] = await Promise.all([
     fetchUserList(accountId, accessToken, startDate, endDate),
