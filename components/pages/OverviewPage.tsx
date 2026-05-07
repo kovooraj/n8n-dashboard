@@ -40,6 +40,10 @@ interface InsightsResult {
   reason?: string;
 }
 
+// Claude: $1 spend ≈ 1.5 hrs saved (same as AIToolsPage)
+const CLAUDE_HOURS_PER_DOLLAR = 1.5;
+const HOURLY_RATE = 20; // $20/hr loaded labour rate
+
 interface OverviewPageData {
   n8nBuckets: N8NSnapshot[];
   n8nTotals: N8NTotals | null;
@@ -49,6 +53,8 @@ interface OverviewPageData {
   elTotals: ElevenLabsTotals | null;
   projects: ClickUpTask[];
   liveWorkflows: WorkflowHealthData[];
+  claudeSpendUsd: number;
+  chatgptTotals: { hoursSaved: number; revenueImpact: number } | null;
 }
 
 function periodLabelFor(p: DashboardPeriod): string {
@@ -67,13 +73,17 @@ export function OverviewPage() {
     async (isRefresh) => {
       const bust = `_t=${Date.now()}`;
       const force = isRefresh ? '&refresh=1' : '';
-      const [n8nRes, finRes, elRes, cuRes, dashRes] = await Promise.allSettled([
+      const [n8nRes, finRes, elRes, cuRes, dashRes, claudeRes, chatgptRes] = await Promise.allSettled([
         fetch(`/api/notion/n8n?period=${period}&${bust}`, { cache: 'no-store' }).then((r) => r.json()),
         fetch(`/api/intercom/fin?period=${period}&${bust}${force}`, { cache: 'no-store' }).then((r) => r.json()),
         fetch(`/api/elevenlabs/calls?period=${period}&${bust}${force}`, { cache: 'no-store' }).then((r) => r.json()),
         fetch(`/api/clickup/projects?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
         fetch(`/api/dashboard?${bust}`, { cache: 'no-store' }).then((r) => r.json()),
+        fetch(`/api/claude/leaderboard?period=${period}&${bust}${force}`, { cache: 'no-store' }).then((r) => r.json()),
+        fetch(`/api/chatgpt/usage?period=${period}&${bust}${force}`, { cache: 'no-store' }).then((r) => r.json()),
       ]);
+      const claudeVal  = claudeRes.status  === 'fulfilled' ? claudeRes.value  : null;
+      const chatgptVal = chatgptRes.status === 'fulfilled' ? chatgptRes.value : null;
       return {
         n8nBuckets:    n8nRes.status  === 'fulfilled' ? (n8nRes.value.buckets   ?? []) as N8NSnapshot[] : [],
         n8nTotals:     n8nRes.status  === 'fulfilled' ? (n8nRes.value.totals    ?? null) as N8NTotals | null : null,
@@ -83,6 +93,9 @@ export function OverviewPage() {
         elTotals:      elRes.status   === 'fulfilled' ? (elRes.value.totals     ?? null) as ElevenLabsTotals | null : null,
         projects:      cuRes.status   === 'fulfilled' ? (cuRes.value.tasks      ?? []) as ClickUpTask[] : [],
         liveWorkflows: dashRes.status === 'fulfilled' ? (dashRes.value.workflows ?? []) as WorkflowHealthData[] : [],
+        // AI tools — graceful: if API not configured they return an error field, we default to 0
+        claudeSpendUsd: !claudeVal?.error ? (claudeVal?.totals?.spendUsd ?? 0) : 0,
+        chatgptTotals:  !chatgptVal?.error ? (chatgptVal?.totals ?? null) : null,
       };
     },
     [period],
@@ -97,14 +110,20 @@ export function OverviewPage() {
   const projects      = pageData?.projects      ?? [];
   const liveWorkflows = pageData?.liveWorkflows ?? [];
 
+  // ── AI tools hours/revenue (Claude + ChatGPT) ─────────────────
+  const claudeHours   = (pageData?.claudeSpendUsd ?? 0) * CLAUDE_HOURS_PER_DOLLAR;
+  const claudeRevenue = claudeHours * HOURLY_RATE;
+  const chatgptHours  = pageData?.chatgptTotals?.hoursSaved   ?? 0;
+  const chatgptRevenue = pageData?.chatgptTotals?.revenueImpact ?? 0;
+
   // ── Combined totals for the selected period ──────────────────
   const totalTriggers =
     (n8nTotals?.totalTriggers ?? 0) +
     (finTotals?.finInvolvement ?? 0) +
     (elTotals?.calls ?? 0);
 
-  const totalHours   = (n8nTotals?.hoursSaved ?? 0) + (finTotals?.hoursSaved ?? 0) + (elTotals?.hoursSaved ?? 0);
-  const totalRevenue = (n8nTotals?.revenueImpact ?? 0) + (finTotals?.revenueImpact ?? 0) + (elTotals?.revenueImpact ?? 0);
+  const totalHours   = (n8nTotals?.hoursSaved ?? 0) + (finTotals?.hoursSaved ?? 0) + (elTotals?.hoursSaved ?? 0) + claudeHours + chatgptHours;
+  const totalRevenue = (n8nTotals?.revenueImpact ?? 0) + (finTotals?.revenueImpact ?? 0) + (elTotals?.revenueImpact ?? 0) + claudeRevenue + chatgptRevenue;
 
   const liveN8nActive  = liveWorkflows.length;
   const n8nActive      = liveN8nActive > 0 ? liveN8nActive : (n8nTotals?.activeWorkflows ?? 0);
@@ -298,13 +317,15 @@ export function OverviewPage() {
               label="Estimated Hours Saved"
               value={formatHours(totalHours)}
               showInfo
-              tooltip={`Hours saved calculated per platform from actual execution data. N8N: successful executions × 10 min / 60. FIN: FIN-resolved conversations × 5 min / 60. ElevenLabs: AI-handled calls × avg call duration / 3600.`}
+              tooltip={`Hours saved across all platforms for the selected ${periodLabelFor(period)}. N8N: successful executions × 10 min / 60. FIN: FIN-resolved conversations × 5 min / 60. ElevenLabs: AI-handled calls × avg call duration / 3600. Claude: spend × $${CLAUDE_HOURS_PER_DOLLAR} hrs/$. ChatGPT: messages ÷ 15 msgs/hr.`}
+              subBadge={<span style={{ fontSize: '0.65rem', color: '#6a8870' }}>N8N · FIN · Calls · Claude · ChatGPT</span>}
             />
             <BenchKPICard
               label="Estimated Revenue Impact"
               value={formatCurrency(totalRevenue)}
               showInfo
-              tooltip={`Labour cost avoided based on hours saved × $20/hr staff rate across all platforms.`}
+              tooltip={`Labour cost avoided based on total hours saved × $${HOURLY_RATE}/hr loaded labour rate. Includes N8N, FIN, ElevenLabs, Claude, and ChatGPT for the selected ${periodLabelFor(period)}.`}
+              subBadge={<span style={{ fontSize: '0.65rem', color: '#6a8870' }}>N8N · FIN · Calls · Claude · ChatGPT</span>}
             />
             <BenchKPICard
               label="Automation Active"
