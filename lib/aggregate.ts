@@ -189,11 +189,12 @@ export function buildBucketRange(period: DashboardPeriod, now: Date = new Date()
       ws.setUTCDate(ws.getUTCDate() + 7);
     }
   } else if (period === 'quarterly') {
-    // 3 months of the current fiscal quarter (Q1=Aug–Oct, Q2=Nov–Jan, Q3=Feb–Apr, Q4=May–Jul)
-    const qStart = fiscalQuarterStart(today);
-    for (let i = 0; i < 3; i++) {
-      const ms = new Date(Date.UTC(qStart.getUTCFullYear(), qStart.getUTCMonth() + i, 1));
-      const me = new Date(Date.UTC(ms.getUTCFullYear(), ms.getUTCMonth() + 1, 0));
+    // Rolling last 3 calendar months (2 months ago + last month + current month).
+    // This ensures quarterly always has ~3× more data than monthly and the
+    // hierarchy holds: weekly ⊂ monthly ⊂ quarterly ⊂ annually.
+    for (let i = 2; i >= 0; i--) {
+      const ms = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - i, 1));
+      const me = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - i + 1, 0));
       buckets.push({
         id: `${ms.getUTCFullYear()}-${pad(ms.getUTCMonth() + 1)}`,
         start: ms,
