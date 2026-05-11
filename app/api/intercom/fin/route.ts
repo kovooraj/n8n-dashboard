@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { unstable_cache, revalidateTag } from 'next/cache';
 import type { DashboardPeriod } from '@/lib/types';
-import { aggregate, periodLookbackDays, type RawSnapshot, type Bucket, type Granularity } from '@/lib/aggregate';
+import { aggregate, periodLookbackDays, periodDateRange, type RawSnapshot, type Bucket, type Granularity } from '@/lib/aggregate';
 import { fetchIntercomDailySnapshots } from '@/lib/intercom-fin';
 import { readSnapshots, writeSnapshots, todayUTC, dateRange } from '@/lib/db-snapshots';
 
@@ -61,12 +61,28 @@ function remapForChannel(snapshots: RawSnapshot[], channel: ChannelFilter): RawS
 
 /**
  * Cache the fully-computed response body for non-weekly periods (~22 hrs).
+ *
+ * DB-first: reads `intercom-fin` snapshots from Supabase for the precise
+ * period window. Falls back to a live Intercom fetch only if the DB is
+ * empty (e.g., new install). This avoids the pathology where a transient
+ * Intercom 0-result gets cached for 22 hours.
+ *
  * The cron job's revalidateTag(CACHE_TAG) invalidates this alongside raw data.
  */
 const getSlowPeriodBody = unstable_cache(
   async (period: string, channel: string, days: number): Promise<object> => {
-    const now   = new Date();
-    const daily = await getCachedDaily(days);
+    const now = new Date();
+    const { startDate, endDate } = periodDateRange(period as DashboardPeriod, now);
+
+    let daily: RawSnapshot[] = [];
+    if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+      daily = await readSnapshots('intercom-fin', startDate, endDate).catch(() => [] as RawSnapshot[]);
+    }
+    // Fallback only if DB has no rows at all for the window
+    if (daily.length === 0) {
+      daily = await getCachedDaily(days);
+    }
+
     const channelData = remapForChannel(daily, channel as ChannelFilter);
     const { buckets, totals, granularity } = aggregate(channelData, period as DashboardPeriod, AGG_RULES, now);
     const bucketPayload = payloadFromBuckets(buckets);
@@ -92,7 +108,7 @@ const getSlowPeriodBody = unstable_cache(
       source: 'intercom',
     };
   },
-  ['intercom-fin-period-body'],
+  ['intercom-fin-period-body-v2-db-first'],
   { revalidate: PERIOD_CACHE_SEC, tags: [CACHE_TAG] },
 );
 
