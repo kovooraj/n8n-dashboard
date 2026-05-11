@@ -1,5 +1,6 @@
 import 'server-only';
 import type { DashboardPeriod } from './types';
+import { periodDateRange } from './aggregate';
 
 // Business-impact constants
 // 15 messages = 1 hour of manual work saved → 15 msgs/hr
@@ -40,25 +41,6 @@ export interface ChatGPTPayload {
   window: { startDate: string; endDate: string };
   source: 'chatgpt-enterprise';
   error?: string;
-}
-
-// ── Date helpers ──────────────────────────────────────────────────────────────
-
-function periodDays(period: DashboardPeriod): number {
-  switch (period) {
-    case 'weekly':    return 7;
-    case 'monthly':   return 30;
-    case 'quarterly': return 90;
-    case 'annually':  return 365;
-  }
-}
-
-function dateRange(period: DashboardPeriod): { startDate: string; endDate: string } {
-  const now  = new Date();
-  const days = periodDays(period);
-  const start = new Date(now.getTime() - days * 86400 * 1000);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  return { startDate: fmt(start), endDate: fmt(now) };
 }
 
 // ── Auth — exchange long-lived session token for a short-lived Bearer JWT ─────
@@ -212,7 +194,7 @@ export async function fetchChatGPTPayload(period: DashboardPeriod): Promise<Chat
     throw new Error('CHATGPT_SESSION_TOKEN and CHATGPT_ACCOUNT_ID must be set in Vercel env vars');
   }
 
-  const { startDate, endDate } = dateRange(period);
+  const { startDate, endDate } = periodDateRange(period);
   const accessToken = await getAccessToken(sessionToken, sessionToken1);
 
   const [users, stats] = await Promise.all([

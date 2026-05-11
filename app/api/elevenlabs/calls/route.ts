@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { unstable_cache, revalidateTag } from 'next/cache';
 import type { DashboardPeriod } from '@/lib/types';
-import { aggregate, type RawSnapshot, type Bucket, type Granularity } from '@/lib/aggregate';
+import { aggregate, periodLookbackDays, type RawSnapshot, type Bucket, type Granularity } from '@/lib/aggregate';
 import { fetchElevenLabsDailySnapshots } from '@/lib/elevenlabs-calls';
 import { readSnapshots, writeSnapshots, todayUTC, dateRange } from '@/lib/db-snapshots';
 
@@ -22,14 +22,7 @@ const AGG_RULES = {
   revenueImpact: 'sum',
 } as const;
 
-function lookbackDays(period: DashboardPeriod): number {
-  switch (period) {
-    case 'weekly': return 10;
-    case 'monthly': return 35;
-    case 'quarterly': return 125;
-    case 'annually': return 380;
-  }
-}
+// `periodLookbackDays` is shared from lib/aggregate.ts.
 
 const getCachedDaily = unstable_cache(
   async (days: number): Promise<RawSnapshot[]> => fetchElevenLabsDailySnapshots(days),
@@ -78,7 +71,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const days = lookbackDays(period);
+  const days = periodLookbackDays(period);
   const ua = request.headers.get('user-agent') ?? '';
   const isCron = ua.toLowerCase().startsWith('vercel-cron');
   // ?warm=1 = cron cache pre-population (do NOT invalidate, just fill the slow-period cache)

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
 import type { DashboardPeriod } from '@/lib/types';
+import { periodDateRange } from '@/lib/aggregate';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -76,14 +77,6 @@ async function listProjects(pat: string): Promise<MgmtProject[]> {
   return (await resp.json()) as MgmtProject[];
 }
 
-function lookbackDays(period: DashboardPeriod): number {
-  switch (period) {
-    case 'weekly':    return 7;
-    case 'monthly':   return 30;
-    case 'quarterly': return 125;
-    case 'annually':  return 365;
-  }
-}
 
 const SOURCE_LABELS: Record<string, string> = {
   'intercom-fin':       'Intercom FIN',
@@ -157,14 +150,13 @@ export async function GET(request: NextRequest) {
   }
 
   // ── AI Projects snapshot stats ────────────────────────────────────────────
-  const days = lookbackDays(period);
-  const fromDate = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
-  const toDate = new Date().toISOString().slice(0, 10);
+  // Use canonical period window (month-aligned, fiscal-Q-aligned, FY-aligned)
+  const { startDate: fromDate, endDate: toDate } = periodDateRange(period);
+  const totalDays = Math.ceil((new Date(`${toDate}T00:00:00Z`).getTime() - new Date(`${fromDate}T00:00:00Z`).getTime()) / 86400_000) + 1;
 
   let buckets: { date: string; syncs: number }[] = [];
   let sources: { source: string; label: string; rows: number }[] = [];
-  // days+1 because the range is [fromDate, toDate] inclusive (both endpoints count)
-  let snapshotTotals = { totalRows: 0, activeSources: 0, avgSyncsPerDay: 0, lastSyncedAt: null as string | null, daysWithData: 0, totalDays: days + 1 };
+  let snapshotTotals = { totalRows: 0, activeSources: 0, avgSyncsPerDay: 0, lastSyncedAt: null as string | null, daysWithData: 0, totalDays };
 
   if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
     try {
@@ -204,10 +196,10 @@ export async function GET(request: NextRequest) {
         snapshotTotals = {
           totalRows: rows.length,
           activeSources: bySource.size,
-          avgSyncsPerDay: Number((rows.length / Math.max(days, 1)).toFixed(1)),
+          avgSyncsPerDay: Number((rows.length / Math.max(totalDays, 1)).toFixed(1)),
           lastSyncedAt,
           daysWithData: byDate.size,
-          totalDays: days + 1,
+          totalDays,
         };
       }
     } catch (e) {

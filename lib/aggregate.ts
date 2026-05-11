@@ -87,6 +87,26 @@ export function periodBucketCount(period: DashboardPeriod): number {
   }
 }
 
+/**
+ * Generous "days back from today" budget per period, used for DB queries and
+ * cache keys. The actual data filtering uses the precise dates returned by
+ * `periodDateRange()` — these values just bound how far back to look.
+ *
+ * Worst-case sizing:
+ *  - weekly:    7 days + buffer for ISO-week alignment
+ *  - monthly:   31 days + buffer for full calendar month
+ *  - quarterly: 92 days max (Aug–Oct fiscal Q1) + buffer
+ *  - annually:  365 days + buffer for full fiscal year
+ */
+export function periodLookbackDays(period: DashboardPeriod): number {
+  switch (period) {
+    case 'weekly':    return 10;
+    case 'monthly':   return 35;
+    case 'quarterly': return 125;
+    case 'annually':  return 380;
+  }
+}
+
 /** Two-digit pad for date parts. */
 function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n);
@@ -134,6 +154,47 @@ function isoWeekNumber(d: Date): number {
 
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DOW_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * Single source of truth for the precise date window each period covers,
+ * relative to today. Always adapts as the date changes — when the calendar
+ * month rolls over, monthly automatically refers to the new month; same for
+ * fiscal quarter and fiscal year.
+ *
+ * Period definitions:
+ *   weekly    → last 7 days inclusive of today
+ *   monthly   → 1st of current calendar month → today
+ *   quarterly → 1st day of current fiscal quarter → today
+ *   annually  → 1st day of current fiscal year (Aug 1) → today
+ *
+ * All routes and chart data should derive their date filtering from this.
+ * Returns ISO YYYY-MM-DD strings (UTC).
+ */
+export function periodDateRange(
+  period: DashboardPeriod,
+  now: Date = new Date(),
+): { startDate: string; endDate: string } {
+  const today = startOfDay(now);
+  let start: Date;
+  switch (period) {
+    case 'weekly': {
+      start = new Date(today);
+      start.setUTCDate(start.getUTCDate() - 6); // last 7 days inclusive
+      break;
+    }
+    case 'monthly':
+      start = startOfMonth(today);
+      break;
+    case 'quarterly':
+      start = fiscalQuarterStart(today);
+      break;
+    case 'annually':
+      start = fiscalYearStart(today);
+      break;
+  }
+  const fmt = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+  return { startDate: fmt(start), endDate: fmt(today) };
+}
 
 export interface BucketRange {
   rangeStart: Date; // inclusive

@@ -3,6 +3,7 @@ import { unstable_cache, revalidateTag } from 'next/cache';
 import type { DashboardPeriod } from '@/lib/types';
 import { TEAM, lookupMember, type Company } from '@/lib/aiToolsTeam';
 import { readPayload, writePayload, todayUTC } from '@/lib/db-snapshots';
+import { periodDateRange } from '@/lib/aggregate';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -28,17 +29,9 @@ export const dynamic = 'force-dynamic';
 const CACHE_REVALIDATE_SEC = 25 * 60 * 60;
 const CACHE_TAG = 'claude-leaderboard';
 
+/** Period start date — sourced from canonical periodDateRange. */
 function startDate(period: DashboardPeriod): string {
-  const now = new Date();
-  let days: number;
-  switch (period) {
-    case 'weekly':    days = 7;   break;
-    case 'monthly':   days = 30;  break;
-    case 'quarterly': days = 125; break;
-    case 'annually':  days = 365; break;
-  }
-  const d = new Date(now.getTime() - days * 86400 * 1000);
-  return d.toISOString().slice(0, 10);
+  return periodDateRange(period).startDate;
 }
 
 interface RankingUser {

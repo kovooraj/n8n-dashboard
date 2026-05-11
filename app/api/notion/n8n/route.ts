@@ -3,6 +3,7 @@ import type { DashboardPeriod, N8nExecution } from '@/lib/types';
 import {
   aggregate,
   buildBucketRange,
+  periodLookbackDays,
   type RawSnapshot,
   type Bucket,
   type Granularity,
@@ -38,14 +39,7 @@ const AGG_RULES = {
   activeWorkflows: 'last',
 } as const;
 
-function lookbackDays(period: DashboardPeriod): number {
-  switch (period) {
-    case 'weekly':    return 10;
-    case 'monthly':   return 35;
-    case 'quarterly': return 125;
-    case 'annually':  return 380;
-  }
-}
+// `periodLookbackDays` is shared from lib/aggregate.ts.
 
 /**
  * Read n8n execution history from Supabase and normalise to the shape
@@ -57,7 +51,7 @@ function lookbackDays(period: DashboardPeriod): number {
  * Both are handled below so historical rows still work.
  */
 async function loadSupabaseRaw(period: DashboardPeriod, now: Date): Promise<RawSnapshot[]> {
-  const days = lookbackDays(period);
+  const days = periodLookbackDays(period);
   const fromDate = new Date(now.getTime() - days * 86400_000).toISOString().slice(0, 10);
   const toDate = toISO(now);
 
