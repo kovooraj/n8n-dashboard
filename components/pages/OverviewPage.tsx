@@ -321,10 +321,10 @@ export function OverviewPage() {
               subBadge={<span style={{ fontSize: '0.65rem', color: '#6a8870' }}>N8N · FIN · Calls · Claude · ChatGPT</span>}
             />
             <BenchKPICard
-              label="Estimated Revenue Impact"
+              label="Estimated Cost Savings Impact"
               value={formatCurrency(totalRevenue)}
               showInfo
-              tooltip={`Labour cost avoided based on total hours saved × $${HOURLY_RATE}/hr loaded labour rate. Includes N8N, FIN, ElevenLabs, Claude, and ChatGPT for the selected ${periodLabelFor(period)}.`}
+              tooltip={`Estimated cost savings — labour cost avoided based on total hours saved × $${HOURLY_RATE}/hr loaded labour rate. Includes N8N, FIN, ElevenLabs, Claude, and ChatGPT for the selected ${periodLabelFor(period)}.`}
               subBadge={<span style={{ fontSize: '0.65rem', color: '#6a8870' }}>N8N · FIN · Calls · Claude · ChatGPT</span>}
             />
             <BenchKPICard
@@ -498,7 +498,7 @@ export function OverviewPage() {
                 }
               </div>
               <div style={{ textAlign: 'right' }}>
-                <p style={{ fontSize: '0.65rem', color: '#6a8870', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 3 }}>Est. Revenue Impact</p>
+                <p style={{ fontSize: '0.65rem', color: '#6a8870', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 3 }}>Est. Cost Savings</p>
                 {loading
                   ? <div className="skeleton" style={{ height: 22, width: 80, borderRadius: 4 }} />
                   : <p style={{ fontSize: '1.3rem', fontWeight: 700, color: '#e4ede6' }}>{formatCurrency(totalRevenue)}</p>

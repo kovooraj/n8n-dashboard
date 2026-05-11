@@ -415,10 +415,10 @@ export function N8NPage({ sidebarWorkflows }: N8NPageProps) {
                     tooltip={`Calculated from successful executions x 10 min average manual effort saved per run, converted to hours. Formula: successful triggers x 10 min / 60. Summed across the ${period} window.`}
                   />
                   <BenchKPICard
-                    label="Estimated Revenue Impact"
+                    label="Estimated Cost Savings Impact"
                     value={formatCurrency(totals?.revenueImpact ?? 0)}
                     showInfo
-                    tooltip={`Labour cost avoided based on hours saved x $20/hr staff rate. Formula: (successful triggers x 10 min / 60) x $20. Summed across the ${period} window.`}
+                    tooltip={`Estimated cost savings — labour cost avoided based on hours saved x $20/hr staff rate. Formula: (successful triggers x 10 min / 60) x $20. Summed across the ${period} window.`}
                   />
                   <BenchKPICard
                     label="Workflows Active"

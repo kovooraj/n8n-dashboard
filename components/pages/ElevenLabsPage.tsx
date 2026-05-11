@@ -147,10 +147,10 @@ export function ElevenLabsPage() {
               tooltip={`Resolved calls × average call duration (seconds) ÷ 3600. ${resolvedCount.toLocaleString()} resolved × ${totals?.avgDuration ?? 0}s avg duration for the ${period} window.`}
             />
             <BenchKPICard
-              label="Estimated Revenue Impact"
+              label="Estimated Cost Savings Impact"
               value={formatCurrency(revenueImpactCalc)}
               showInfo
-              tooltip={`Hours saved × $${REVENUE_PER_HOUR}/hour (loaded labour rate). ${formatHours(hoursSavedCalc)} × $${REVENUE_PER_HOUR} for the ${period} window.`}
+              tooltip={`Estimated cost savings — hours saved × $${REVENUE_PER_HOUR}/hour (loaded labour rate). ${formatHours(hoursSavedCalc)} × $${REVENUE_PER_HOUR} for the ${period} window.`}
             />
             <BenchKPICard
               label="CSAT Score"

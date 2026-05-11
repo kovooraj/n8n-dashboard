@@ -398,7 +398,7 @@ export function AIToolsPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 28 }}>
           <BenchKPICard label="Total AI Spend" value={formatCurrency(totalSpend)} showInfo tooltip="Combined spend across all connected AI tools." />
           <BenchKPICard label="Estimated Hours Saved" value={formatHours(totalHours)} showInfo tooltip={`Total AI spend × ${HOURS_PER_DOLLAR} hrs/$`} />
-          <BenchKPICard label="Estimated Revenue Impact" value={formatCurrency(totalHours * HOURLY_RATE)} showInfo tooltip={`Hours saved × $${HOURLY_RATE}/hr`} />
+          <BenchKPICard label="Estimated Cost Savings Impact" value={formatCurrency(totalHours * HOURLY_RATE)} showInfo tooltip={`Hours saved × $${HOURLY_RATE}/hr`} />
         </div>
 
         <SectionHeader eyebrow="TOOL BREAKDOWN" title="Spend by AI tool" />
@@ -936,7 +936,7 @@ export function AIToolsPage() {
             subBadge={<span style={{ fontSize: '0.65rem', color: '#6a8870' }}>{claudeActive}/{filteredUsers.length} seats active</span>}
           />
           <BenchKPICard label="Estimated Hours Saved" value={claudeLoading ? '—' : formatHours(claudeHours)} showInfo tooltip={`$1 of Claude spend ≈ ${HOURS_PER_DOLLAR} hours of augmented work.`} />
-          <BenchKPICard label="Estimated Revenue Impact" value={claudeLoading ? '—' : formatCurrency(claudeHours * HOURLY_RATE)} showInfo tooltip={`Hours saved × $${HOURLY_RATE}/hr.`} />
+          <BenchKPICard label="Estimated Cost Savings Impact" value={claudeLoading ? '—' : formatCurrency(claudeHours * HOURLY_RATE)} showInfo tooltip={`Hours saved × $${HOURLY_RATE}/hr.`} />
         </div>
 
         {unmappedUsers.length > 0 && (
@@ -1108,7 +1108,7 @@ export function AIToolsPage() {
             tooltip="15 messages = 1 hour of manual effort saved. Formula: messages ÷ 15."
           />
           <BenchKPICard
-            label="Est. Value"
+            label="Est. Cost Savings"
             value={chatgptLoading ? '—' : formatCurrency(chatgptTotals?.revenueImpact ?? 0)}
             showInfo
             tooltip="Hours saved × $20/hr. Based on 15 messages = 1 hour of manual effort at $20/hr labour rate."

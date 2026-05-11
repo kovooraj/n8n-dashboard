@@ -172,10 +172,10 @@ export function FINPage() {
               tooltip={`Resolved conversations x 5 min average human handle time saved per resolution, converted to hours. Formula: FIN-resolved x 5 min / 60. Summed over the ${period} window.`}
             />
             <BenchKPICard
-              label="Estimated Revenue Impact"
+              label="Estimated Cost Savings Impact"
               value={formatCurrency(totals?.revenueImpact ?? 0)}
               showInfo
-              tooltip={`Hours saved x $20/hr loaded labour rate. Formula: (FIN-resolved x 5 min / 60) x $20. Summed over the ${period} window.`}
+              tooltip={`Estimated cost savings — hours saved x $20/hr loaded labour rate. Formula: (FIN-resolved x 5 min / 60) x $20. Summed over the ${period} window.`}
             />
             <BenchKPICard
               label="CSAT Score"
