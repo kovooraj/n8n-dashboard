@@ -277,107 +277,239 @@ export function OverviewPage() {
   }
 
   // ── Download the current summary as a PDF (jsPDF, client-side) ────────────
+  // Styled to match the popup modal: dark cards with rounded corners, eyebrow
+  // labels in accent colours, side-by-side Improvements/Regressions.
   async function downloadSummaryPDF() {
     if (!summary) return;
     const { jsPDF } = await import('jspdf');
     const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+
     const pageW = doc.internal.pageSize.getWidth();
-    const margin = 48;
+    const pageH = doc.internal.pageSize.getHeight();
+    const margin = 40;
     const contentW = pageW - margin * 2;
+
+    // Palette mirrors the modal styling
+    const PAGE_BG       = '#0a130c';
+    const CARD_BG       = '#0d1810';
+    const CARD_BORDER   = '#1a2c1d';
+    const HEADLINE_BG   = '#0f1e13'; // slight green tint
+    const HEADLINE_BORDER = '#1f4a2a';
+    const TEXT_PRIMARY   = '#e4ede6';
+    const TEXT_SECONDARY = '#c8d4cc';
+    const TEXT_MUTED     = '#6a8870';
+    const ACCENT_GREEN   = '#3dba62';
+    const ACCENT_RED     = '#e05858';
+    const ACCENT_BLUE    = '#4a9eca';
+
+    const periodLabel = periodLabelFor(summary.period);
+
+    // Paint the page background and reset on every new page
+    const paintPage = () => {
+      doc.setFillColor(PAGE_BG);
+      doc.rect(0, 0, pageW, pageH, 'F');
+    };
+    paintPage();
+
     let y = margin;
 
-    const writeHeading = (text: string, size = 14, color = '#1a2c1d') => {
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(size);
-      doc.setTextColor(color);
-      doc.text(text, margin, y);
-      y += size + 6;
-    };
-    const writeParagraph = (text: string, size = 10, color = '#222') => {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(size);
-      doc.setTextColor(color);
-      const lines = doc.splitTextToSize(text, contentW) as string[];
-      for (const line of lines) {
-        if (y > 740) { doc.addPage(); y = margin; }
-        doc.text(line, margin, y);
-        y += size + 4;
-      }
-    };
-    const writeBullets = (items: string[], size = 10) => {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(size);
-      doc.setTextColor('#222');
-      for (const item of items) {
-        const lines = doc.splitTextToSize(`• ${item}`, contentW - 12) as string[];
-        for (let i = 0; i < lines.length; i++) {
-          if (y > 740) { doc.addPage(); y = margin; }
-          doc.text(lines[i], margin + (i === 0 ? 0 : 12), y);
-          y += size + 4;
-        }
-      }
-    };
-
-    // Title bar
-    doc.setFillColor('#0d1810');
-    doc.rect(0, 0, pageW, 76, 'F');
-    doc.setTextColor('#e4ede6');
+    // ── Header ───────────────────────────────────────────────────────────
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(20);
-    doc.text('Automation Dashboard — Executive Summary', margin, 36);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    doc.setTextColor('#6a8870');
-    const periodLabel = periodLabelFor(summary.period);
-    doc.text(
-      `Period: ${summary.period} (${summary.currentWindow.startDate} → ${summary.currentWindow.endDate})  vs  previous ${periodLabel} (${summary.previousWindow.startDate} → ${summary.previousWindow.endDate})`,
-      margin,
-      56,
-    );
-    doc.text(`Generated ${new Date().toLocaleString()} · ${summary.source === 'claude' ? 'AI-analysed (Claude)' : 'Heuristic fallback'}`, margin, 68);
-    y = 110;
+    doc.setFontSize(8);
+    doc.setTextColor(TEXT_MUTED);
+    doc.text('AUTOMATION DASHBOARD · EXECUTIVE SUMMARY', margin, y + 10);
+    y += 22;
 
-    writeHeading('Executive Summary');
-    writeParagraph(summary.executive);
-    y += 6;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(17);
+    doc.setTextColor(TEXT_PRIMARY);
+    const title = `${summary.period[0].toUpperCase() + summary.period.slice(1)} comparison`;
+    doc.text(title, margin, y);
+    y += 18;
 
-    writeHeading('Period-over-Period Overview');
-    writeParagraph(summary.overview);
-    y += 6;
-
-    if (summary.improvements.length > 0) {
-      writeHeading('What Improved', 13, '#2d6a3e');
-      writeBullets(summary.improvements);
-      y += 6;
-    }
-    if (summary.regressions.length > 0) {
-      writeHeading('What Regressed', 13, '#a04040');
-      writeBullets(summary.regressions);
-      y += 6;
-    }
-    if (summary.drivers.length > 0) {
-      writeHeading('Possible Drivers', 13);
-      writeBullets(summary.drivers);
-      y += 6;
-    }
-    if (summary.recommendations.length > 0) {
-      writeHeading('Recommended Next Actions', 13, '#3a4f6b');
-      writeBullets(summary.recommendations);
-      y += 6;
-    }
-
-    // Appendix: raw totals
-    if (y > 600) { doc.addPage(); y = margin; }
-    writeHeading('Appendix · Raw Totals', 12);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
-    doc.setTextColor('#444');
-    const json = JSON.stringify({ current: summary.currentTotals, previous: summary.previousTotals }, null, 2);
-    const jsonLines = doc.splitTextToSize(json, contentW) as string[];
-    for (const line of jsonLines) {
-      if (y > 750) { doc.addPage(); y = margin; }
-      doc.text(line, margin, y);
-      y += 11;
+    doc.setTextColor(TEXT_MUTED);
+    doc.text(
+      `${summary.currentWindow.startDate} → ${summary.currentWindow.endDate}   vs previous ${periodLabel} (${summary.previousWindow.startDate} → ${summary.previousWindow.endDate})`,
+      margin, y,
+    );
+    y += 12;
+    doc.text(
+      `Generated ${new Date().toLocaleString()} · ${summary.source === 'claude' ? 'AI-analysed (Claude)' : 'Heuristic fallback'}`,
+      margin, y,
+    );
+    y += 22;
+
+    // ── Card helpers (match modal sizing) ────────────────────────────────
+    const CARD_PADDING_X = 14;
+    const CARD_PADDING_Y = 14;
+    const EYEBROW_H      = 12;
+    const EYEBROW_GAP    = 8;
+    const CARD_RADIUS    = 6;
+    const SECTION_GAP    = 12;
+
+    function measureParagraph(text: string, width: number, size: number): number {
+      doc.setFontSize(size);
+      const lines = doc.splitTextToSize(text, width) as string[];
+      return lines.length * (size * 1.45);
+    }
+
+    function measureBullets(items: string[], width: number, size: number): number {
+      doc.setFontSize(size);
+      const lineH = size * 1.45;
+      let total = 0;
+      for (const item of items) {
+        const lines = doc.splitTextToSize(item, width - 12) as string[];
+        total += lines.length * lineH + 3; // small inter-bullet gap
+      }
+      return Math.max(0, total - 3); // trim trailing gap
+    }
+
+    function ensureSpace(needed: number) {
+      if (y + needed > pageH - margin) {
+        doc.addPage();
+        paintPage();
+        y = margin;
+      }
+    }
+
+    function drawCard(
+      x: number, yTop: number, w: number, h: number,
+      bg: string = CARD_BG, border: string = CARD_BORDER,
+    ) {
+      doc.setFillColor(bg);
+      doc.setDrawColor(border);
+      doc.setLineWidth(0.6);
+      doc.roundedRect(x, yTop, w, h, CARD_RADIUS, CARD_RADIUS, 'FD');
+    }
+
+    function drawEyebrow(text: string, x: number, yTop: number, color: string) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(color);
+      doc.text(text.toUpperCase(), x, yTop + 8); // baseline ~8pt below box top
+    }
+
+    function drawParagraph(text: string, x: number, yTop: number, width: number, size: number, color: string) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(size);
+      doc.setTextColor(color);
+      const lines = doc.splitTextToSize(text, width) as string[];
+      const lineH = size * 1.45;
+      lines.forEach((line, i) => doc.text(line, x, yTop + (i + 1) * lineH - 2));
+    }
+
+    function drawBullets(items: string[], x: number, yTop: number, width: number, size: number) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(size);
+      const lineH = size * 1.45;
+      let cursor = yTop;
+      for (const item of items) {
+        const lines = doc.splitTextToSize(item, width - 12) as string[];
+        // bullet glyph in green (matches modal)
+        doc.setTextColor(ACCENT_GREEN);
+        doc.text('•', x, cursor + lineH - 2);
+        doc.setTextColor(TEXT_SECONDARY);
+        lines.forEach((line, i) => doc.text(line, x + 12, cursor + lineH - 2 + i * lineH));
+        cursor += lines.length * lineH + 3;
+      }
+    }
+
+    function renderParagraphCard(eyebrow: string, eyebrowColor: string, text: string) {
+      const innerW = contentW - CARD_PADDING_X * 2;
+      const contentH = measureParagraph(text, innerW, 10);
+      const cardH = CARD_PADDING_Y + EYEBROW_H + EYEBROW_GAP + contentH + CARD_PADDING_Y;
+      ensureSpace(cardH + SECTION_GAP);
+      drawCard(margin, y, contentW, cardH);
+      drawEyebrow(eyebrow, margin + CARD_PADDING_X, y + CARD_PADDING_Y, eyebrowColor);
+      drawParagraph(
+        text,
+        margin + CARD_PADDING_X,
+        y + CARD_PADDING_Y + EYEBROW_H + EYEBROW_GAP - 2,
+        innerW, 10, TEXT_SECONDARY,
+      );
+      y += cardH + SECTION_GAP;
+    }
+
+    function renderBulletsCard(eyebrow: string, eyebrowColor: string, items: string[]) {
+      const innerW = contentW - CARD_PADDING_X * 2;
+      const contentH = measureBullets(items, innerW, 10);
+      const cardH = CARD_PADDING_Y + EYEBROW_H + EYEBROW_GAP + contentH + CARD_PADDING_Y;
+      ensureSpace(cardH + SECTION_GAP);
+      drawCard(margin, y, contentW, cardH);
+      drawEyebrow(eyebrow, margin + CARD_PADDING_X, y + CARD_PADDING_Y, eyebrowColor);
+      drawBullets(items, margin + CARD_PADDING_X, y + CARD_PADDING_Y + EYEBROW_H + EYEBROW_GAP - 2, innerW, 10);
+      y += cardH + SECTION_GAP;
+    }
+
+    // ── HEADLINE (green-tinted card) ─────────────────────────────────────
+    {
+      const innerW = contentW - CARD_PADDING_X * 2;
+      const contentH = measureParagraph(summary.executive, innerW, 12);
+      const cardH = CARD_PADDING_Y + EYEBROW_H + EYEBROW_GAP + contentH + CARD_PADDING_Y;
+      ensureSpace(cardH + SECTION_GAP);
+      drawCard(margin, y, contentW, cardH, HEADLINE_BG, HEADLINE_BORDER);
+      drawEyebrow('HEADLINE', margin + CARD_PADDING_X, y + CARD_PADDING_Y, ACCENT_GREEN);
+      drawParagraph(
+        summary.executive,
+        margin + CARD_PADDING_X,
+        y + CARD_PADDING_Y + EYEBROW_H + EYEBROW_GAP - 2,
+        innerW, 12, TEXT_PRIMARY,
+      );
+      y += cardH + SECTION_GAP;
+    }
+
+    // ── Overview ─────────────────────────────────────────────────────────
+    renderParagraphCard('Period-over-Period Overview', TEXT_MUTED, summary.overview);
+
+    // ── Improvements + Regressions side-by-side (matches grid 1fr 1fr) ───
+    if (summary.improvements.length > 0 || summary.regressions.length > 0) {
+      const colGap = 10;
+      const colW = (contentW - colGap) / 2;
+      const innerColW = colW - CARD_PADDING_X * 2;
+
+      const leftItems  = summary.improvements;
+      const rightItems = summary.regressions;
+      const leftH  = leftItems.length  ? measureBullets(leftItems,  innerColW, 10) : 0;
+      const rightH = rightItems.length ? measureBullets(rightItems, innerColW, 10) : 0;
+      const maxContentH = Math.max(leftH, rightH);
+      const cardH = CARD_PADDING_Y + EYEBROW_H + EYEBROW_GAP + maxContentH + CARD_PADDING_Y;
+
+      ensureSpace(cardH + SECTION_GAP);
+
+      if (leftItems.length > 0) {
+        drawCard(margin, y, colW, cardH);
+        drawEyebrow('What Improved', margin + CARD_PADDING_X, y + CARD_PADDING_Y, ACCENT_GREEN);
+        drawBullets(
+          leftItems,
+          margin + CARD_PADDING_X,
+          y + CARD_PADDING_Y + EYEBROW_H + EYEBROW_GAP - 2,
+          innerColW, 10,
+        );
+      }
+      if (rightItems.length > 0) {
+        const rx = margin + colW + colGap;
+        drawCard(rx, y, colW, cardH);
+        drawEyebrow('What Regressed', rx + CARD_PADDING_X, y + CARD_PADDING_Y, ACCENT_RED);
+        drawBullets(
+          rightItems,
+          rx + CARD_PADDING_X,
+          y + CARD_PADDING_Y + EYEBROW_H + EYEBROW_GAP - 2,
+          innerColW, 10,
+        );
+      }
+      y += cardH + SECTION_GAP;
+    }
+
+    // ── Drivers ──────────────────────────────────────────────────────────
+    if (summary.drivers.length > 0) {
+      renderBulletsCard('Possible Drivers', TEXT_MUTED, summary.drivers);
+    }
+
+    // ── Recommendations (blue accent) ────────────────────────────────────
+    if (summary.recommendations.length > 0) {
+      renderBulletsCard('Recommended Next Actions', ACCENT_BLUE, summary.recommendations);
     }
 
     const filename = `executive-summary-${summary.period}-${summary.currentWindow.startDate}.pdf`;
