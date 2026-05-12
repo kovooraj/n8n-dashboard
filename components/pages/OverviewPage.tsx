@@ -8,7 +8,7 @@ import { BenchKPICard } from '@/components/BenchKPICard';
 import { HideCompletedToggle } from '@/components/HideCompletedToggle';
 import { ChartSkeleton, KPIGridSkeleton, InlineSkeletonRows } from '@/components/Skeleton';
 import { useStaleData } from '@/lib/useStaleData';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, FileText, Download, X } from 'lucide-react';
 import type { DashboardPeriod, N8NSnapshot, FINSnapshot, ElevenLabsSnapshot, ClickUpTask, ChartPoint, N8NTotals, FINTotals, ElevenLabsTotals, WorkflowHealthData } from '@/lib/types';
 import { formatCurrency, formatHours } from '@/lib/chartUtils';
 
@@ -40,6 +40,23 @@ interface InsightsResult {
   reason?: string;
 }
 
+/** Shape returned by /api/insights/executive-summary. */
+interface ExecutiveSummaryResult {
+  executive: string;
+  overview: string;
+  improvements: string[];
+  regressions: string[];
+  drivers: string[];
+  recommendations: string[];
+  currentTotals: { n8n: unknown; fin: unknown; el: unknown };
+  previousTotals: { n8n: Record<string, number>; fin: Record<string, number>; el: Record<string, number> };
+  currentWindow: { startDate: string; endDate: string };
+  previousWindow: { startDate: string; endDate: string };
+  period: DashboardPeriod;
+  source: 'claude' | 'heuristic';
+  reason?: string;
+}
+
 // Claude: $1 spend ≈ 1.5 hrs saved (same as AIToolsPage)
 const CLAUDE_HOURS_PER_DOLLAR = 1.5;
 const HOURLY_RATE = 20; // $20/hr loaded labour rate
@@ -66,6 +83,12 @@ export function OverviewPage() {
   const [hideCompleted, setHideCompleted] = useState(true);
   const [insights, setInsights] = useState<InsightsResult | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(false);
+
+  // ── Executive summary state (period-over-period AI analysis) ──────────────
+  const [summary, setSummary] = useState<ExecutiveSummaryResult | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
 
   // ── Main data — stale-while-revalidate with localStorage cache ───────────
   const { data: pageData, loading, refreshing, stale, refresh } = useStaleData<OverviewPageData>(
@@ -228,6 +251,139 @@ export function OverviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period, loading, n8nTotals, finTotals, elTotals, liveWorkflows.length]);
 
+  // ── Generate executive summary (current vs previous period via Claude) ────
+  async function generateSummary() {
+    setSummaryLoading(true);
+    setSummaryError(null);
+    setShowSummaryModal(true);
+    try {
+      const resp = await fetch('/api/insights/executive-summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          period,
+          current: { n8n: n8nTotals, fin: finTotals, el: elTotals },
+        }),
+        cache: 'no-store',
+      });
+      const data = (await resp.json()) as ExecutiveSummaryResult & { error?: string };
+      if (!resp.ok || data.error) throw new Error(data.error ?? `HTTP ${resp.status}`);
+      setSummary(data);
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : 'Failed to generate summary');
+    } finally {
+      setSummaryLoading(false);
+    }
+  }
+
+  // ── Download the current summary as a PDF (jsPDF, client-side) ────────────
+  async function downloadSummaryPDF() {
+    if (!summary) return;
+    const { jsPDF } = await import('jspdf');
+    const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const margin = 48;
+    const contentW = pageW - margin * 2;
+    let y = margin;
+
+    const writeHeading = (text: string, size = 14, color = '#1a2c1d') => {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(size);
+      doc.setTextColor(color);
+      doc.text(text, margin, y);
+      y += size + 6;
+    };
+    const writeParagraph = (text: string, size = 10, color = '#222') => {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(size);
+      doc.setTextColor(color);
+      const lines = doc.splitTextToSize(text, contentW) as string[];
+      for (const line of lines) {
+        if (y > 740) { doc.addPage(); y = margin; }
+        doc.text(line, margin, y);
+        y += size + 4;
+      }
+    };
+    const writeBullets = (items: string[], size = 10) => {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(size);
+      doc.setTextColor('#222');
+      for (const item of items) {
+        const lines = doc.splitTextToSize(`• ${item}`, contentW - 12) as string[];
+        for (let i = 0; i < lines.length; i++) {
+          if (y > 740) { doc.addPage(); y = margin; }
+          doc.text(lines[i], margin + (i === 0 ? 0 : 12), y);
+          y += size + 4;
+        }
+      }
+    };
+
+    // Title bar
+    doc.setFillColor('#0d1810');
+    doc.rect(0, 0, pageW, 76, 'F');
+    doc.setTextColor('#e4ede6');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(20);
+    doc.text('Automation Dashboard — Executive Summary', margin, 36);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor('#6a8870');
+    const periodLabel = periodLabelFor(summary.period);
+    doc.text(
+      `Period: ${summary.period} (${summary.currentWindow.startDate} → ${summary.currentWindow.endDate})  vs  previous ${periodLabel} (${summary.previousWindow.startDate} → ${summary.previousWindow.endDate})`,
+      margin,
+      56,
+    );
+    doc.text(`Generated ${new Date().toLocaleString()} · ${summary.source === 'claude' ? 'AI-analysed (Claude)' : 'Heuristic fallback'}`, margin, 68);
+    y = 110;
+
+    writeHeading('Executive Summary');
+    writeParagraph(summary.executive);
+    y += 6;
+
+    writeHeading('Period-over-Period Overview');
+    writeParagraph(summary.overview);
+    y += 6;
+
+    if (summary.improvements.length > 0) {
+      writeHeading('What Improved', 13, '#2d6a3e');
+      writeBullets(summary.improvements);
+      y += 6;
+    }
+    if (summary.regressions.length > 0) {
+      writeHeading('What Regressed', 13, '#a04040');
+      writeBullets(summary.regressions);
+      y += 6;
+    }
+    if (summary.drivers.length > 0) {
+      writeHeading('Possible Drivers', 13);
+      writeBullets(summary.drivers);
+      y += 6;
+    }
+    if (summary.recommendations.length > 0) {
+      writeHeading('Recommended Next Actions', 13, '#3a4f6b');
+      writeBullets(summary.recommendations);
+      y += 6;
+    }
+
+    // Appendix: raw totals
+    if (y > 600) { doc.addPage(); y = margin; }
+    writeHeading('Appendix · Raw Totals', 12);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor('#444');
+    const json = JSON.stringify({ current: summary.currentTotals, previous: summary.previousTotals }, null, 2);
+    const jsonLines = doc.splitTextToSize(json, contentW) as string[];
+    for (const line of jsonLines) {
+      if (y > 750) { doc.addPage(); y = margin; }
+      doc.text(line, margin, y);
+      y += 11;
+    }
+
+    const filename = `executive-summary-${summary.period}-${summary.currentWindow.startDate}.pdf`;
+    doc.save(filename);
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ padding: '0 24px', flexShrink: 0, paddingTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -252,6 +408,22 @@ export function OverviewPage() {
           >
             Build v3 · {loading ? '…' : `${projects.length} tasks · ${period}`}
           </span>
+          <button
+            onClick={generateSummary}
+            disabled={loading || summaryLoading}
+            title={`Analyse current ${periodLabelFor(period)} vs previous ${periodLabelFor(period)} and produce a downloadable PDF summary.`}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              background: summaryLoading ? 'rgba(61,186,98,0.10)' : 'rgba(61,186,98,0.05)',
+              border: '1px solid rgba(61,186,98,0.35)', borderRadius: 6, padding: '5px 10px',
+              cursor: (loading || summaryLoading) ? 'not-allowed' : 'pointer', color: '#3dba62',
+              fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em',
+              textTransform: 'uppercase', opacity: (loading || summaryLoading) ? 0.6 : 1,
+            }}
+          >
+            <FileText size={11} color="#3dba62" />
+            {summaryLoading ? 'Analysing…' : 'Executive Summary'}
+          </button>
           <button
             onClick={() => refresh()}
             disabled={refreshing}
@@ -529,6 +701,167 @@ export function OverviewPage() {
 
         <div style={{ height: 24 }} />
       </div>
+
+      {/* ── Executive Summary modal ─────────────────────────────────────── */}
+      {showSummaryModal && (
+        <div
+          onClick={() => !summaryLoading && setShowSummaryModal(false)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 1000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#0a130c', border: '1px solid #1a2c1d', borderRadius: 10,
+              maxWidth: 880, width: '100%', maxHeight: '90vh', display: 'flex', flexDirection: 'column',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+            }}
+          >
+            {/* Header */}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '18px 24px', borderBottom: '1px solid #1a2c1d',
+            }}>
+              <div>
+                <p className="section-eyebrow" style={{ marginBottom: 4 }}>Executive Summary</p>
+                <h2 style={{ fontSize: '1.3rem', fontWeight: 600, color: '#e4ede6', margin: 0 }}>
+                  {summary
+                    ? `${summary.period[0].toUpperCase() + summary.period.slice(1)} comparison · ${summary.currentWindow.startDate} → ${summary.currentWindow.endDate}`
+                    : `Analysing the current ${periodLabelFor(period)}…`}
+                </h2>
+                {summary && (
+                  <p style={{ fontSize: '0.7rem', color: '#6a8870', margin: '4px 0 0 0' }}>
+                    vs previous {periodLabelFor(summary.period)} ({summary.previousWindow.startDate} → {summary.previousWindow.endDate})
+                    {' · '}
+                    {summary.source === 'claude' ? 'AI-analysed (Claude)' : 'Heuristic fallback'}
+                  </p>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {summary && (
+                  <button
+                    onClick={downloadSummaryPDF}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      background: 'rgba(61,186,98,0.10)',
+                      border: '1px solid rgba(61,186,98,0.35)', borderRadius: 6, padding: '6px 12px',
+                      cursor: 'pointer', color: '#3dba62',
+                      fontSize: '0.7rem', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase',
+                    }}
+                  >
+                    <Download size={12} /> Download PDF
+                  </button>
+                )}
+                <button
+                  onClick={() => !summaryLoading && setShowSummaryModal(false)}
+                  disabled={summaryLoading}
+                  style={{
+                    background: 'transparent', border: '1px solid #1a2c1d', borderRadius: 6,
+                    padding: 6, cursor: summaryLoading ? 'not-allowed' : 'pointer',
+                    color: '#6a8870', display: 'flex', opacity: summaryLoading ? 0.4 : 1,
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }} className="custom-scroll">
+              {summaryLoading && (
+                <div style={{ textAlign: 'center', padding: '40px 0', color: '#6a8870' }}>
+                  <RefreshCw size={20} className="animate-spin" style={{ margin: '0 auto 12px' }} />
+                  <p style={{ fontSize: '0.85rem' }}>
+                    Comparing current {periodLabelFor(period)} with previous {periodLabelFor(period)} via Claude…
+                  </p>
+                </div>
+              )}
+
+              {summaryError && !summaryLoading && (
+                <div style={{
+                  background: 'rgba(224,88,88,0.08)', border: '1px solid rgba(224,88,88,0.25)',
+                  borderRadius: 6, padding: 16, color: '#e05858',
+                }}>
+                  <p style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 6 }}>Could not generate summary</p>
+                  <p style={{ fontSize: '0.75rem' }}>{summaryError}</p>
+                </div>
+              )}
+
+              {summary && !summaryLoading && !summaryError && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                  {/* Headline */}
+                  <div style={{
+                    background: 'rgba(61,186,98,0.05)', border: '1px solid rgba(61,186,98,0.25)',
+                    borderRadius: 8, padding: 16,
+                  }}>
+                    <p className="section-eyebrow" style={{ marginBottom: 6, color: '#3dba62' }}>HEADLINE</p>
+                    <p style={{ fontSize: '1.05rem', color: '#e4ede6', fontWeight: 500, margin: 0, lineHeight: 1.45 }}>
+                      {summary.executive}
+                    </p>
+                  </div>
+
+                  {/* Overview */}
+                  <SummarySection title="Period-over-Period Overview">
+                    <p style={{ fontSize: '0.85rem', color: '#c8d4cc', lineHeight: 1.55, margin: 0 }}>{summary.overview}</p>
+                  </SummarySection>
+
+                  {/* Improvements + Regressions side-by-side */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    {summary.improvements.length > 0 && (
+                      <SummarySection title="What Improved" accent="#3dba62">
+                        <SummaryBullets items={summary.improvements} />
+                      </SummarySection>
+                    )}
+                    {summary.regressions.length > 0 && (
+                      <SummarySection title="What Regressed" accent="#e05858">
+                        <SummaryBullets items={summary.regressions} />
+                      </SummarySection>
+                    )}
+                  </div>
+
+                  {/* Drivers */}
+                  {summary.drivers.length > 0 && (
+                    <SummarySection title="Possible Drivers">
+                      <SummaryBullets items={summary.drivers} />
+                    </SummarySection>
+                  )}
+
+                  {/* Recommendations */}
+                  {summary.recommendations.length > 0 && (
+                    <SummarySection title="Recommended Next Actions" accent="#4a9eca">
+                      <SummaryBullets items={summary.recommendations} />
+                    </SummarySection>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function SummarySection({ title, accent, children }: { title: string; accent?: string; children: React.ReactNode }) {
+  return (
+    <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, padding: 14 }}>
+      <p className="section-eyebrow" style={{ marginBottom: 8, color: accent ?? '#6a8870' }}>{title}</p>
+      {children}
+    </div>
+  );
+}
+
+function SummaryBullets({ items }: { items: string[] }) {
+  return (
+    <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {items.map((item, i) => (
+        <li key={i} style={{ fontSize: '0.82rem', color: '#c8d4cc', lineHeight: 1.5, paddingLeft: 14, position: 'relative' }}>
+          <span style={{ position: 'absolute', left: 0, color: '#3dba62' }}>•</span>
+          {item}
+        </li>
+      ))}
+    </ul>
   );
 }

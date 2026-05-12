@@ -196,6 +196,54 @@ export function periodDateRange(
   return { startDate: fmt(start), endDate: fmt(today) };
 }
 
+/**
+ * The period immediately before `period` for the given reference date.
+ * Used for period-over-period executive summaries.
+ *
+ *   weekly    → the 7 days ending the day before periodDateRange.startDate
+ *   monthly   → the full previous calendar month
+ *   quarterly → the previous fiscal quarter (full 3 months)
+ *   annually  → the previous fiscal year (full 12 months ending last Jul 31)
+ *
+ * Both bounds inclusive. Returns ISO YYYY-MM-DD strings (UTC).
+ */
+export function previousPeriodDateRange(
+  period: DashboardPeriod,
+  now: Date = new Date(),
+): { startDate: string; endDate: string } {
+  const today = startOfDay(now);
+  let start: Date;
+  let end: Date;
+  switch (period) {
+    case 'weekly': {
+      end = new Date(today);
+      end.setUTCDate(end.getUTCDate() - 7); // day before the current 7-day window started
+      start = new Date(end);
+      start.setUTCDate(start.getUTCDate() - 6); // 7 days inclusive ending at `end`
+      break;
+    }
+    case 'monthly': {
+      start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
+      end   = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0)); // last day of prev month
+      break;
+    }
+    case 'quarterly': {
+      const curQ = fiscalQuarterStart(today);
+      start = new Date(Date.UTC(curQ.getUTCFullYear(), curQ.getUTCMonth() - 3, 1));
+      end   = new Date(Date.UTC(curQ.getUTCFullYear(), curQ.getUTCMonth(), 0)); // day before curQ
+      break;
+    }
+    case 'annually': {
+      const curFY = fiscalYearStart(today);
+      start = new Date(Date.UTC(curFY.getUTCFullYear() - 1, curFY.getUTCMonth(), 1));
+      end   = new Date(Date.UTC(curFY.getUTCFullYear(), curFY.getUTCMonth(), 0)); // day before curFY
+      break;
+    }
+  }
+  const fmt = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+  return { startDate: fmt(start), endDate: fmt(end) };
+}
+
 export interface BucketRange {
   rangeStart: Date; // inclusive
   rangeEnd: Date;   // inclusive (last day of the window)
