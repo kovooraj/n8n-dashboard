@@ -268,7 +268,18 @@ export function OverviewPage() {
       });
       const data = (await resp.json()) as ExecutiveSummaryResult & { error?: string };
       if (!resp.ok || data.error) throw new Error(data.error ?? `HTTP ${resp.status}`);
-      setSummary(data);
+      // Defensive: rewrite £/€ → $ in case Claude slips. All underlying values
+      // are USD ($20/hr labour rate set in code).
+      const fixCurrency = (s: string) => (s ?? '').replace(/£/g, '$').replace(/€/g, '$');
+      setSummary({
+        ...data,
+        executive:       fixCurrency(data.executive),
+        overview:        fixCurrency(data.overview),
+        improvements:    (data.improvements    ?? []).map(fixCurrency),
+        regressions:     (data.regressions     ?? []).map(fixCurrency),
+        drivers:         (data.drivers         ?? []).map(fixCurrency),
+        recommendations: (data.recommendations ?? []).map(fixCurrency),
+      });
     } catch (err) {
       setSummaryError(err instanceof Error ? err.message : 'Failed to generate summary');
     } finally {
@@ -288,6 +299,21 @@ export function OverviewPage() {
     const pageH = doc.internal.pageSize.getHeight();
     const margin = 40;
     const contentW = pageW - margin * 2;
+
+    // Helvetica (jsPDF's default font) is Latin-1 only — Unicode arrows / dashes
+    // / curly quotes render as garbled `!'` etc. Normalise everything to ASCII
+    // before drawing. Also defensively convert £/€ to $ in case Claude slips.
+    const safeText = (s: string): string =>
+      (s ?? '')
+        .replace(/→/g, '->')
+        .replace(/←/g, '<-')
+        .replace(/·/g, '-')      // U+00B7 middot — NOT the U+2022 bullet glyph
+        .replace(/[–—]/g, '-')
+        .replace(/['']/g, "'")
+        .replace(/[""]/g, '"')
+        .replace(/…/g, '...')
+        .replace(/£/g, '$')
+        .replace(/€/g, '$');
 
     // Palette mirrors the modal styling
     const PAGE_BG       = '#0a130c';
@@ -317,26 +343,26 @@ export function OverviewPage() {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
     doc.setTextColor(TEXT_MUTED);
-    doc.text('AUTOMATION DASHBOARD · EXECUTIVE SUMMARY', margin, y + 10);
+    doc.text(safeText('AUTOMATION DASHBOARD · EXECUTIVE SUMMARY'), margin, y + 10);
     y += 22;
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(17);
     doc.setTextColor(TEXT_PRIMARY);
     const title = `${summary.period[0].toUpperCase() + summary.period.slice(1)} comparison`;
-    doc.text(title, margin, y);
+    doc.text(safeText(title), margin, y);
     y += 18;
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(TEXT_MUTED);
     doc.text(
-      `${summary.currentWindow.startDate} → ${summary.currentWindow.endDate}   vs previous ${periodLabel} (${summary.previousWindow.startDate} → ${summary.previousWindow.endDate})`,
+      safeText(`${summary.currentWindow.startDate} -> ${summary.currentWindow.endDate}    vs previous ${periodLabel} (${summary.previousWindow.startDate} -> ${summary.previousWindow.endDate})`),
       margin, y,
     );
     y += 12;
     doc.text(
-      `Generated ${new Date().toLocaleString()} · ${summary.source === 'claude' ? 'AI-analysed (Claude)' : 'Heuristic fallback'}`,
+      safeText(`Generated ${new Date().toLocaleString()} - ${summary.source === 'claude' ? 'AI-analysed (Claude)' : 'Heuristic fallback'}`),
       margin, y,
     );
     y += 22;
@@ -351,7 +377,7 @@ export function OverviewPage() {
 
     function measureParagraph(text: string, width: number, size: number): number {
       doc.setFontSize(size);
-      const lines = doc.splitTextToSize(text, width) as string[];
+      const lines = doc.splitTextToSize(safeText(text), width) as string[];
       return lines.length * (size * 1.45);
     }
 
@@ -360,7 +386,7 @@ export function OverviewPage() {
       const lineH = size * 1.45;
       let total = 0;
       for (const item of items) {
-        const lines = doc.splitTextToSize(item, width - 12) as string[];
+        const lines = doc.splitTextToSize(safeText(item), width - 12) as string[];
         total += lines.length * lineH + 3; // small inter-bullet gap
       }
       return Math.max(0, total - 3); // trim trailing gap
@@ -388,14 +414,14 @@ export function OverviewPage() {
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(8);
       doc.setTextColor(color);
-      doc.text(text.toUpperCase(), x, yTop + 8); // baseline ~8pt below box top
+      doc.text(safeText(text).toUpperCase(), x, yTop + 8); // baseline ~8pt below box top
     }
 
     function drawParagraph(text: string, x: number, yTop: number, width: number, size: number, color: string) {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(size);
       doc.setTextColor(color);
-      const lines = doc.splitTextToSize(text, width) as string[];
+      const lines = doc.splitTextToSize(safeText(text), width) as string[];
       const lineH = size * 1.45;
       lines.forEach((line, i) => doc.text(line, x, yTop + (i + 1) * lineH - 2));
     }
@@ -406,8 +432,8 @@ export function OverviewPage() {
       const lineH = size * 1.45;
       let cursor = yTop;
       for (const item of items) {
-        const lines = doc.splitTextToSize(item, width - 12) as string[];
-        // bullet glyph in green (matches modal)
+        const lines = doc.splitTextToSize(safeText(item), width - 12) as string[];
+        // bullet glyph in green (matches modal) — U+2022 IS supported by Helvetica
         doc.setTextColor(ACCENT_GREEN);
         doc.text('•', x, cursor + lineH - 2);
         doc.setTextColor(TEXT_SECONDARY);
