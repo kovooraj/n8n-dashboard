@@ -3,7 +3,7 @@ import { unstable_cache, revalidateTag } from 'next/cache';
 import type { DashboardPeriod } from '@/lib/types';
 import type { Company } from '@/lib/aiToolsTeam';
 import { readPayload, writePayload, todayUTC } from '@/lib/db-snapshots';
-import { periodDateRange } from '@/lib/aggregate';
+import { periodDateRange, previousPeriodDateRange } from '@/lib/aggregate';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -222,9 +222,10 @@ interface Payload {
   window: { startingAt: string; endingAt: string };
 }
 
-async function buildPayload(adminKey: string, period: DashboardPeriod): Promise<Payload> {
-  // Use the canonical period window — month-aligned, fiscal-Q-aligned, FY-aligned
-  const { startDate, endDate } = periodDateRange(period);
+async function buildPayload(adminKey: string, period: DashboardPeriod, isPrevious = false): Promise<Payload> {
+  // Use the canonical period window — month-aligned, fiscal-Q-aligned, FY-aligned.
+  // When isPrevious=true, use the period BEFORE the current one (e.g. last full month).
+  const { startDate, endDate } = isPrevious ? previousPeriodDateRange(period) : periodDateRange(period);
   const startingAt = `${startDate}T00:00:00.000Z`;
   const endingAt   = `${endDate}T23:59:59.999Z`;
   // `days` is just used for bucket sizing in the Anthropic API (1d/1w/1m)
@@ -258,7 +259,9 @@ async function buildPayload(adminKey: string, period: DashboardPeriod): Promise<
   for (const b of costBuckets) {
     for (const r of b.results ?? []) {
       const wsId = r.workspace_id ?? '__default__';
-      costByWs.set(wsId, (costByWs.get(wsId) ?? 0) + (r.amount ?? 0));
+      // r.amount can come back as a string from Anthropic — coerce before summing
+      const amt = Number(r.amount ?? 0) || 0;
+      costByWs.set(wsId, (costByWs.get(wsId) ?? 0) + amt);
     }
   }
 
@@ -329,14 +332,16 @@ async function buildPayload(adminKey: string, period: DashboardPeriod): Promise<
 }
 
 const getCached = unstable_cache(
-  async (period: DashboardPeriod, adminKey: string) => buildPayload(adminKey, period),
-  ['anthropic-usage-v3-period-aligned'],
+  async (period: DashboardPeriod, adminKey: string, isPrevious: boolean) =>
+    buildPayload(adminKey, period, isPrevious),
+  ['anthropic-usage-v4-prev-support'],
   { revalidate: CACHE_REVALIDATE_SEC, tags: [CACHE_TAG] },
 );
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const period = (searchParams.get('period') ?? 'weekly') as DashboardPeriod;
+  const isPrevious = searchParams.get('previous') === '1';
 
   const adminKey = process.env.ANTHROPIC_ADMIN_KEY;
   if (!adminKey) {
@@ -352,7 +357,7 @@ export async function GET(request: NextRequest) {
   if (forceRefresh) revalidateTag(CACHE_TAG, 'max');
 
   try {
-    const dbKey = `anthropic-usage-${period}`;
+    const dbKey = `anthropic-usage-${period}${isPrevious ? '-prev' : ''}`;
     const today = todayUTC();
 
     // Serve from DB if today's payload is already stored and not a forced refresh
@@ -365,7 +370,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const payload = await getCached(period, adminKey);
+    const payload = await getCached(period, adminKey, isPrevious);
 
     // Persist today's result for fast reads for the rest of the day
     if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
