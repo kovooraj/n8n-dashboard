@@ -50,7 +50,7 @@ async function fetchRankings(
   orgId: string,
   sessionKey: string,
   startAt: string,
-  limit = 100,
+  limit = 1000, // bumped from 100 — top-N response, anyone outside is dropped
 ): Promise<RankingsResp> {
   const url = `https://claude.ai/api/organizations/${orgId}/analytics/users/rankings?metric=spend&start_date=${startAt}&limit=${limit}`;
   const resp = await fetch(url, {

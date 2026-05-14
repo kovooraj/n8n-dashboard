@@ -512,24 +512,70 @@ export function AIToolsPage() {
         {/* Manage Roster */}
         <SectionHeader eyebrow="SETTINGS" title="Manage roster assignments" />
         <p style={{ fontSize: '0.75rem', color: '#6a8870', marginBottom: 16, lineHeight: 1.5 }}>
-          Assign departments and companies for every person across Claude and ChatGPT. Changes apply to all department breakdowns — saved to Supabase, no deploy needed.
+          Every user detected in <strong style={{ color: '#b8d4bd' }}>TEAM roster</strong>, <strong style={{ color: '#d4912a' }}>Claude</strong>, or <strong style={{ color: '#10a37f' }}>ChatGPT</strong> for the selected period is listed below — badges show which tools each person has access to. Edit their department and company assignment and save. <em>Reset</em> clears a saved override; the row stays as long as the user is still detected by any of the three sources.
         </p>
         {/* Roster table — rows inlined in map() to avoid nested-component remount on every keystroke */}
         {(() => {
-          const teamEmailSet = new Set(TEAM.map((m) => m.email.toLowerCase()));
-          const chatgptOnly  = chatgptUsers.filter((u) => !teamEmailSet.has(u.email.toLowerCase()) && u.messages > 0);
-          const totalRows    = TEAM.length + chatgptOnly.length;
+          // ── Build the unified roster: TEAM ∪ Claude users ∪ ChatGPT users ∪ override-only emails ──
+          const teamByEmail = new Map(TEAM.map((m) => [m.email.toLowerCase(), m]));
+          const claudeByEmail = new Map(claudeUsers.map((u) => [u.email.toLowerCase(), u]));
+          const chatgptByEmail = new Map(chatgptUsers.map((u) => [u.email.toLowerCase(), u]));
 
-          const renderRow = (
-            email: string, name: string,
-            defaultDept: string, defaultCompanies: Company[],
-            isTeamMember: boolean, rowIndex: number,
-          ) => {
-            const saved       = rosterOverrides[email];
-            const edit        = rosterEdits[email] ?? { department: defaultDept, companies: defaultCompanies };
-            const isDirty     = JSON.stringify(rosterEdits[email]) !== JSON.stringify(rosterOverrides[email]);
+          interface RosterEntry {
+            email: string;
+            name: string;
+            defaultDept: string;
+            defaultCompanies: Company[];
+            inTeam: boolean;
+            hasClaude: boolean;
+            hasChatGPT: boolean;
+          }
+
+          const allEmails = new Set<string>([
+            ...teamByEmail.keys(),
+            ...claudeByEmail.keys(),
+            ...chatgptByEmail.keys(),
+            ...Object.keys(rosterOverrides),
+          ]);
+
+          const entries: RosterEntry[] = Array.from(allEmails).map((email) => {
+            const tm = teamByEmail.get(email);
+            const cl = claudeByEmail.get(email);
+            const cg = chatgptByEmail.get(email);
+            return {
+              email,
+              name: tm?.name || cl?.name || cg?.name || email.split('@')[0],
+              defaultDept: tm?.department || 'Unmapped',
+              defaultCompanies: tm?.companies || ['sinalite', 'willowpack'],
+              inTeam: !!tm,
+              hasClaude: !!cl,
+              hasChatGPT: !!cg && cg.messages > 0,
+            };
+          });
+
+          // Sort: team members first (alpha), then everyone else (alpha)
+          entries.sort((a, b) => {
+            if (a.inTeam !== b.inTeam) return a.inTeam ? -1 : 1;
+            return a.name.localeCompare(b.name);
+          });
+
+          const totalRows = entries.length;
+
+          const Badge = ({ label, color }: { label: string; color: string }) => (
+            <span style={{
+              fontSize: '0.55rem', fontWeight: 700, color,
+              letterSpacing: '0.08em', padding: '1px 5px',
+              background: `${color}1f`, border: `1px solid ${color}55`, borderRadius: 3,
+            }}>{label}</span>
+          );
+
+          const renderRow = (entry: RosterEntry, rowIndex: number) => {
+            const { email, name, defaultDept, defaultCompanies, inTeam, hasClaude, hasChatGPT } = entry;
+            const saved        = rosterOverrides[email];
+            const edit         = rosterEdits[email] ?? { department: defaultDept, companies: defaultCompanies };
+            const isDirty      = JSON.stringify(rosterEdits[email]) !== JSON.stringify(rosterOverrides[email]);
             const isOverridden = !!saved;
-            const isLast      = rowIndex === totalRows - 1;
+            const isLast       = rowIndex === totalRows - 1;
             return (
               <div key={email} style={{
                 display: 'grid', gridTemplateColumns: '1.8fr 1.4fr 1fr 80px',
@@ -538,10 +584,13 @@ export function AIToolsPage() {
                 background: isDirty ? 'rgba(212,145,42,0.04)' : 'transparent',
               }}>
                 <div style={{ minWidth: 0 }}>
-                  <p style={{ fontSize: '0.82rem', fontWeight: 600, color: '#e4ede6', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <p style={{ fontSize: '0.82rem', fontWeight: 600, color: '#e4ede6', margin: 0, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     {name}
-                    {isOverridden && <span style={{ fontSize: '0.55rem', fontWeight: 700, color: '#4a9eca', letterSpacing: '0.08em', padding: '1px 5px', background: 'rgba(74,158,202,0.12)', border: '1px solid rgba(74,158,202,0.3)', borderRadius: 3 }}>CUSTOM</span>}
-                    {!isTeamMember && <span style={{ fontSize: '0.55rem', fontWeight: 700, color: '#10a37f', letterSpacing: '0.08em', padding: '1px 5px', background: 'rgba(16,163,127,0.12)', border: '1px solid rgba(16,163,127,0.3)', borderRadius: 3 }}>ChatGPT</span>}
+                    {inTeam       && <Badge label="TEAM"    color="#b8d4bd" />}
+                    {hasClaude    && <Badge label="CLAUDE"  color="#d4912a" />}
+                    {hasChatGPT   && <Badge label="CHATGPT" color="#10a37f" />}
+                    {isOverridden && <Badge label="CUSTOM"  color="#4a9eca" />}
+                    {isDirty      && <Badge label="UNSAVED" color="#e0a040" />}
                   </p>
                   <p style={{ fontSize: '0.68rem', color: '#6a8870', margin: '2px 0 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{email}</p>
                 </div>
@@ -581,7 +630,7 @@ export function AIToolsPage() {
                 </div>
                 <button
                   onClick={() => setRosterEdits((prev) => { const next = { ...prev }; delete next[email]; return next; })}
-                  title={isTeamMember ? 'Reset to static default' : 'Remove mapping (mark as Unmapped)'}
+                  title={isDirty ? 'Discard unsaved edit' : (isOverridden ? 'Clear saved override (back to default mapping)' : 'No override to reset')}
                   style={{
                     background: 'transparent', border: '1px solid #1a2c1d', borderRadius: 4,
                     color: '#6a8870', fontSize: '0.65rem', padding: '3px 8px', cursor: 'pointer',
@@ -592,27 +641,37 @@ export function AIToolsPage() {
             );
           };
 
+          // Counts for the header summary
+          const teamCount    = entries.filter((e) => e.inTeam).length;
+          const claudeCount  = entries.filter((e) => e.hasClaude).length;
+          const chatgptCount = entries.filter((e) => e.hasChatGPT).length;
+
           return (
             <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 14 }}>
+              <div style={{
+                padding: '8px 16px', background: 'rgba(74,158,202,0.05)',
+                borderBottom: '1px solid #1a2c1d', display: 'flex', gap: 14,
+                fontSize: '0.65rem', color: '#6a8870', letterSpacing: '0.05em',
+              }}>
+                <span><strong style={{ color: '#e4ede6' }}>{totalRows}</strong> total users</span>
+                <span>·</span>
+                <span><strong style={{ color: '#b8d4bd' }}>{teamCount}</strong> in TEAM roster</span>
+                <span>·</span>
+                <span><strong style={{ color: '#d4912a' }}>{claudeCount}</strong> with Claude access</span>
+                <span>·</span>
+                <span><strong style={{ color: '#10a37f' }}>{chatgptCount}</strong> active on ChatGPT</span>
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 1.4fr 1fr 80px', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
                 {['Member', 'Department', 'Company', ''].map((h, idx) => (
                   <span key={idx} style={{ fontSize: '0.6rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
                 ))}
               </div>
-              {TEAM.map((m, i) => renderRow(m.email.toLowerCase(), m.name, m.department, m.companies, true, i))}
-              {chatgptOnly.length > 0 && (
-                <>
-                  <div style={{ padding: '6px 16px', background: 'rgba(16,163,127,0.06)', borderTop: '1px solid rgba(16,163,127,0.2)', borderBottom: '1px solid rgba(16,163,127,0.2)' }}>
-                    <span style={{ fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#10a37f' }}>
-                      ChatGPT users not in static roster ({chatgptOnly.length})
-                    </span>
-                  </div>
-                  {chatgptOnly.map((u, i) => renderRow(u.email.toLowerCase(), u.name, 'Unmapped', ['sinalite', 'willowpack'], false, TEAM.length + i))}
-                </>
-              )}
-              {chatgptOnly.length === 0 && !chatgptConnected && (
-                <div style={{ padding: '12px 16px', borderTop: '1px solid #1a2c1d' }}>
-                  <p style={{ fontSize: '0.72rem', color: '#4a6450', margin: 0 }}>Connect ChatGPT Enterprise to see ChatGPT-only users here.</p>
+              {entries.map((entry, i) => renderRow(entry, i))}
+              {totalRows === 0 && (
+                <div style={{ padding: '14px 16px' }}>
+                  <p style={{ fontSize: '0.72rem', color: '#4a6450', margin: 0 }}>
+                    No users detected yet. Roster will populate once Claude and ChatGPT integrations return activity.
+                  </p>
                 </div>
               )}
             </div>
@@ -1085,16 +1144,16 @@ export function AIToolsPage() {
         <SectionHeader eyebrow="1. USAGE" title="ChatGPT Enterprise usage" />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
           <BenchKPICard
-            label="Total Messages"
+            label="Total AI Activity"
             value={chatgptLoading ? '—' : (chatgptTotals?.totalMessages ?? 0).toLocaleString()}
             showInfo
-            tooltip="Messages sent by all users in the selected period (from ChatGPT Enterprise workspace analytics)."
+            tooltip="Total AI activity across all users — user-typed messages PLUS every tool, connector, and project invocation triggered by those messages. ChatGPT's raw `messages` field undercounts because a single prompt can fan out to many tool / connector calls (e.g. 1 prompt → 5 Salesforce connector hits)."
           />
           <BenchKPICard
             label="Active Users"
             value={chatgptLoading ? '—' : chatgptTotals?.activeUsers ?? 0}
             showInfo
-            tooltip={`Users who sent at least 1 message. ${chatgptStats?.claimedSeats ?? 0} seats claimed of ${chatgptStats?.purchasedSeats ?? 0} purchased.`}
+            tooltip={`Users with at least 1 AI action (message, tool, connector, or project) in the period. ${chatgptStats?.claimedSeats ?? 0} seats claimed of ${chatgptStats?.purchasedSeats ?? 0} purchased.`}
             subBadge={
               <span style={{ fontSize: '0.65rem', color: '#6a8870' }}>
                 {chatgptTotals?.activeUsers ?? 0}/{chatgptStats?.claimedSeats ?? 0} seats active
@@ -1105,13 +1164,13 @@ export function AIToolsPage() {
             label="Est. Hours Saved"
             value={chatgptLoading ? '—' : formatHours(chatgptTotals?.hoursSaved ?? 0)}
             showInfo
-            tooltip="15 messages = 1 hour of manual effort saved. Formula: messages ÷ 15."
+            tooltip="15 AI actions = 1 hour of manual effort saved. Formula: total activity ÷ 15."
           />
           <BenchKPICard
             label="Est. Cost Savings"
             value={chatgptLoading ? '—' : formatCurrency(chatgptTotals?.revenueImpact ?? 0)}
             showInfo
-            tooltip="Hours saved × $20/hr. Based on 15 messages = 1 hour of manual effort at $20/hr labour rate."
+            tooltip="Hours saved × $20/hr loaded labour rate. Based on 15 AI actions = 1 hour of manual effort."
           />
         </div>
 

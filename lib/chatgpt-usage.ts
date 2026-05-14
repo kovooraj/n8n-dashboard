@@ -129,11 +129,23 @@ async function fetchUserList(
     };
 
     for (const u of data.users ?? []) {
-      const hoursSaved = u.messages / MESSAGES_PER_HOUR;
+      // The ChatGPT API returns `messages` (user-initiated prompts) PLUS
+      // separate breakdowns: gpt / tool / connector / project. Real-world
+      // testing showed `messages` can be FAR less than the sum of breakdowns
+      // (e.g. one prompt that triggers 5 connector calls counts as 1 message
+      // but 5 connector_messages). Use the max of both so we never undercount
+      // total AI activity — this is what cost savings should reflect.
+      const breakdownSum =
+        (u.gpt_messages ?? 0) +
+        (u.tool_messages ?? 0) +
+        (u.connector_messages ?? 0) +
+        (u.project_messages ?? 0);
+      const totalActivity = Math.max(u.messages ?? 0, breakdownSum);
+      const hoursSaved = totalActivity / MESSAGES_PER_HOUR;
       users.push({
         name:               u.name,
         email:              u.email,
-        messages:           u.messages,
+        messages:           totalActivity,           // primary metric — total AI activity
         gptMessages:        u.gpt_messages,
         toolMessages:       u.tool_messages,
         connectorMessages:  u.connector_messages,
@@ -202,12 +214,15 @@ export async function fetchChatGPTPayload(period: DashboardPeriod): Promise<Chat
     fetchUserStats(accountId, accessToken, startDate, endDate),
   ]);
 
+  // u.messages is now totalActivity = max(api_messages, sum_of_breakdowns)
   const totalMessages = users.reduce((s, u) => s + u.messages, 0);
   const totalHours    = totalMessages / MESSAGES_PER_HOUR;
 
   return {
     users,
-    stats,
+    // Override org-stats totalMessages with our recomputed activity sum so
+    // every dashboard cell tells the same story.
+    stats: { ...stats, totalMessages },
     totals: {
       activeUsers:   users.filter((u) => u.messages > 0).length,
       totalMessages,
