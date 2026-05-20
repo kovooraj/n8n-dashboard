@@ -27,6 +27,58 @@ function SectionHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
   );
 }
 
+/**
+ * Conversations card showing Total / Resolved / Pending as a single KPI block.
+ * Visual style matches BenchKPICard but renders three stacked stats inside.
+ */
+function ConversationsBreakdownCard({
+  total, resolved, pending, period,
+}: { total: number; resolved: number; pending: number; period: string }) {
+  return (
+    <div style={{
+      position: 'relative', display: 'flex', flexDirection: 'column', gap: 10,
+      borderRadius: 8, padding: 16,
+      background: '#0d1810', border: '1px solid #1a2c1d', minWidth: 0,
+    }}>
+      <p style={{
+        fontSize: '0.6rem', fontWeight: 600, letterSpacing: '0.12em',
+        textTransform: 'uppercase', color: '#6a8870', margin: 0,
+      }}>
+        Conversations
+      </p>
+      <div>
+        <p style={{ fontSize: '1.6rem', fontWeight: 700, color: '#e4ede6', margin: 0, lineHeight: 1.1 }}>
+          {total.toLocaleString()}
+        </p>
+        <p style={{ fontSize: '0.6rem', color: '#6a8870', letterSpacing: '0.08em', textTransform: 'uppercase', margin: '2px 0 0 0' }}>
+          Total · FIN involved
+        </p>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, paddingTop: 8, borderTop: '1px solid #1a2c1d' }}>
+        <div>
+          <p style={{ fontSize: '1rem', fontWeight: 700, color: '#3dba62', margin: 0, lineHeight: 1.1 }}>
+            {resolved.toLocaleString()}
+          </p>
+          <p style={{ fontSize: '0.58rem', color: '#6a8870', letterSpacing: '0.08em', textTransform: 'uppercase', margin: '2px 0 0 0' }}>
+            FIN resolved
+          </p>
+        </div>
+        <div>
+          <p style={{ fontSize: '1rem', fontWeight: 700, color: '#d4912a', margin: 0, lineHeight: 1.1 }}>
+            {pending.toLocaleString()}
+          </p>
+          <p style={{ fontSize: '0.58rem', color: '#6a8870', letterSpacing: '0.08em', textTransform: 'uppercase', margin: '2px 0 0 0' }}>
+            FIN pending
+          </p>
+        </div>
+      </div>
+      <p style={{ fontSize: '0.6rem', color: '#4a6450', margin: 0, lineHeight: 1.3 }}>
+        Total = FIN-involved conversations · Resolved = AI marked solved (assumed/confirmed) · Pending = AI still working ({period} window).
+      </p>
+    </div>
+  );
+}
+
 const STATUS_COLORS: Record<string, string> = {
   complete: '#3dba62',
   'in progress': '#d4912a',
@@ -159,11 +211,11 @@ export function FINPage() {
           <div style={{ marginBottom: 20 }}><KPIGridSkeleton count={4} /></div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
-            <BenchKPICard
-              label="Conversations"
-              value={(totals?.finInvolvement ?? 0).toLocaleString()}
-              showInfo
-              tooltip={`Count of customer conversations where Intercom FIN engaged. Pulled daily from the Intercom Conversations API and stored in Supabase (intercom-fin). Summed across daily rows in the selected ${period} window.`}
+            <ConversationsBreakdownCard
+              total={totals?.finInvolvement ?? 0}
+              resolved={totals?.finResolved ?? 0}
+              pending={totals?.finPending ?? 0}
+              period={period}
             />
             <BenchKPICard
               label="Estimated Hours Saved"
@@ -181,7 +233,7 @@ export function FINPage() {
               label="CSAT Score"
               value={`${totals?.csat ?? 0}%`}
               showInfo
-              tooltip={`Customer satisfaction score averaged across daily snapshot rows stored in Supabase. Source: Intercom post-conversation CSAT ratings, pulled nightly. Only days with actual ratings are included in the average.`}
+              tooltip={`% positive ratings (4 or 5) out of total ratings — same definition Intercom uses in their Support Performance dashboard. Computed from raw csatPositive / csatCount sums over the ${period} window so multi-day totals stay exact.`}
             />
           </div>
         )}

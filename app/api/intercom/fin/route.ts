@@ -17,8 +17,12 @@ const CACHE_TAG = 'intercom-fin';
 const AGG_RULES = {
   finInvolvement: 'sum',
   finResolved: 'sum',
+  finPending: 'sum',
   finAutomationRate: 'avg',
-  csat: 'avg',
+  // CSAT % is now derived from csatPositive / csatCount sums so multi-day totals are exact
+  csatPositive: 'sum',
+  csatCount: 'sum',
+  csat: 'avg', // legacy per-day average — only used as fallback when sums are absent
   finProcedureUses: 'sum',
   activeFinProcedures: 'last',
   hoursSaved: 'sum',
@@ -49,7 +53,10 @@ function remapForChannel(snapshots: RawSnapshot[], channel: ChannelFilter): RawS
       // Replace the standard keys with channel-specific values
       finInvolvement:    s.metrics[`${prefix}finInvolvement`]    ?? 0,
       finResolved:       s.metrics[`${prefix}finResolved`]       ?? 0,
+      finPending:        s.metrics[`${prefix}finPending`]        ?? 0,
       finAutomationRate: s.metrics[`${prefix}finAutomationRate`] ?? 0,
+      csatPositive:      s.metrics[`${prefix}csatPositive`]      ?? 0,
+      csatCount:         s.metrics[`${prefix}csatCount`]         ?? 0,
       csat:              s.metrics[`${prefix}csat`]              ?? 0,
       hoursSaved:        s.metrics[`${prefix}hoursSaved`]        ?? 0,
       revenueImpact:     s.metrics[`${prefix}revenueImpact`]     ?? 0,
@@ -87,16 +94,25 @@ const getSlowPeriodBody = unstable_cache(
     const { buckets, totals, granularity } = aggregate(channelData, period as DashboardPeriod, AGG_RULES, now);
     const bucketPayload = payloadFromBuckets(buckets);
     const snapshots = [...bucketPayload].reverse();
+    // Precise CSAT from raw sums (positive / count * 100). Falls back to
+    // legacy per-day average when csatCount sum is zero (e.g. cached rows
+    // pre-dating the schema change).
+    const csatCount    = Number(totals.csatCount    ?? 0);
+    const csatPositive = Number(totals.csatPositive ?? 0);
+    const csat = csatCount > 0 ? (csatPositive / csatCount) * 100 : (totals.csat ?? 0);
     return {
       snapshots,
       buckets: bucketPayload,
       totals: {
         finInvolvement:    Math.round(totals.finInvolvement ?? 0),
         finResolved:       Math.round(totals.finResolved ?? 0),
+        finPending:        Math.round(totals.finPending ?? 0),
         finAutomationRate: totals.finInvolvement > 0
           ? Number(((totals.finResolved / totals.finInvolvement) * 100).toFixed(1))
           : 0,
-        csat:               Number((totals.csat ?? 0).toFixed(1)),
+        csat:               Number(csat.toFixed(1)),
+        csatPositive:       Math.round(csatPositive),
+        csatCount:          Math.round(csatCount),
         finProcedureUses:   Math.round(totals.finProcedureUses ?? 0),
         activeFinProcedures:Math.round(totals.activeFinProcedures ?? 0),
         hoursSaved:         Number((totals.hoursSaved ?? 0).toFixed(2)),
@@ -108,7 +124,7 @@ const getSlowPeriodBody = unstable_cache(
       source: 'intercom',
     };
   },
-  ['intercom-fin-period-body-v2-db-first'],
+  ['intercom-fin-period-body-v3-pending-csat'],
   { revalidate: PERIOD_CACHE_SEC, tags: [CACHE_TAG] },
 );
 
@@ -213,6 +229,7 @@ interface BucketPayload {
   count: number;
   finInvolvement: number;
   finResolved: number;
+  finPending: number;
   finAutomationRate: number;
   csat: number;
   finProcedureUses: number;
@@ -222,37 +239,50 @@ interface BucketPayload {
 }
 
 function payloadFromBuckets(buckets: Bucket[]): BucketPayload[] {
-  return buckets.map((b) => ({
-    id: b.id,
-    weekLabel: b.longLabel,
-    label: b.label,
-    start: b.start,
-    end: b.end,
-    count: b.count,
-    finInvolvement: Math.round(b.metrics.finInvolvement ?? 0),
-    finResolved: Math.round(b.metrics.finResolved ?? 0),
-    finAutomationRate: Number((b.metrics.finAutomationRate ?? 0).toFixed(1)),
-    csat: Number((b.metrics.csat ?? 0).toFixed(1)),
-    finProcedureUses: Math.round(b.metrics.finProcedureUses ?? 0),
-    activeFinProcedures: Math.round(b.metrics.activeFinProcedures ?? 0),
-    hoursSaved: Number((b.metrics.hoursSaved ?? 0).toFixed(2)),
-    revenueImpact: Number((b.metrics.revenueImpact ?? 0).toFixed(2)),
-  }));
+  return buckets.map((b) => {
+    // Recompute CSAT per bucket from the raw sums if available
+    const cnt = Number(b.metrics.csatCount ?? 0);
+    const pos = Number(b.metrics.csatPositive ?? 0);
+    const csatPct = cnt > 0 ? (pos / cnt) * 100 : (b.metrics.csat ?? 0);
+    return {
+      id: b.id,
+      weekLabel: b.longLabel,
+      label: b.label,
+      start: b.start,
+      end: b.end,
+      count: b.count,
+      finInvolvement: Math.round(b.metrics.finInvolvement ?? 0),
+      finResolved: Math.round(b.metrics.finResolved ?? 0),
+      finPending: Math.round(b.metrics.finPending ?? 0),
+      finAutomationRate: Number((b.metrics.finAutomationRate ?? 0).toFixed(1)),
+      csat: Number(csatPct.toFixed(1)),
+      finProcedureUses: Math.round(b.metrics.finProcedureUses ?? 0),
+      activeFinProcedures: Math.round(b.metrics.activeFinProcedures ?? 0),
+      hoursSaved: Number((b.metrics.hoursSaved ?? 0).toFixed(2)),
+      revenueImpact: Number((b.metrics.revenueImpact ?? 0).toFixed(2)),
+    };
+  });
 }
 
 function mkResponse(buckets: Bucket[], totals: Record<string, number>, granularity: Granularity, channel: ChannelFilter = 'all') {
   const bucketPayload = payloadFromBuckets(buckets);
   const snapshots = [...bucketPayload].reverse();
+  const csatCount    = Number(totals.csatCount    ?? 0);
+  const csatPositive = Number(totals.csatPositive ?? 0);
+  const csat = csatCount > 0 ? (csatPositive / csatCount) * 100 : (totals.csat ?? 0);
   const body = {
     snapshots,
     buckets: bucketPayload,
     totals: {
       finInvolvement: Math.round(totals.finInvolvement ?? 0),
       finResolved: Math.round(totals.finResolved ?? 0),
+      finPending: Math.round(totals.finPending ?? 0),
       finAutomationRate: totals.finInvolvement > 0
         ? Number(((totals.finResolved / totals.finInvolvement) * 100).toFixed(1))
         : 0,
-      csat: Number((totals.csat ?? 0).toFixed(1)),
+      csat: Number(csat.toFixed(1)),
+      csatPositive: Math.round(csatPositive),
+      csatCount: Math.round(csatCount),
       finProcedureUses: Math.round(totals.finProcedureUses ?? 0),
       activeFinProcedures: Math.round(totals.activeFinProcedures ?? 0),
       hoursSaved: Number((totals.hoursSaved ?? 0).toFixed(2)),

@@ -7,6 +7,7 @@ const PAGE_SIZE = 150;
 const HANDLE_TIME_MIN_PER_RESOLUTION = 5;
 const REVENUE_PER_HOUR = 20;
 const RESOLVED_STATES = new Set(['assumed_resolution', 'confirmed_resolution']);
+const PENDING_STATES  = new Set(['pending']); // FIN still working, no escalation yet
 
 interface IntercomConversation {
   id: string;
@@ -130,14 +131,23 @@ function toChannel(source: IntercomConversation['source']): 'messenger' | 'email
 export function buildIntercomDailySnapshots(
   convs: IntercomConversation[],
 ): RawSnapshot[] {
-  interface ChAcc { involved: number; resolved: number; csatSum: number; csatCount: number }
+  interface ChAcc {
+    involved: number;
+    resolved: number;
+    pending: number;        // ai_agent_participated AND resolution_state === 'pending'
+    csatSum: number;        // legacy: sum of raw 1-5 ratings (kept for back-compat)
+    csatPositive: number;   // count of ratings >= 4 (industry-standard CSAT numerator)
+    csatCount: number;      // total ratings (denominator)
+  }
   interface DayAcc {
     all: ChAcc;
     messenger: ChAcc;
     email: ChAcc;
   }
 
-  function emptyAcc(): ChAcc { return { involved: 0, resolved: 0, csatSum: 0, csatCount: 0 }; }
+  function emptyAcc(): ChAcc {
+    return { involved: 0, resolved: 0, pending: 0, csatSum: 0, csatPositive: 0, csatCount: 0 };
+  }
 
   const byDay = new Map<string, DayAcc>();
 
@@ -151,10 +161,13 @@ export function buildIntercomDailySnapshots(
     if (ch === 'email')     targets.push(dayAcc.email);
 
     if (c.ai_agent_participated) {
-      const isResolved = c.ai_agent?.resolution_state != null && RESOLVED_STATES.has(c.ai_agent.resolution_state);
+      const rstate    = c.ai_agent?.resolution_state ?? null;
+      const isResolved = rstate != null && RESOLVED_STATES.has(rstate);
+      const isPending  = rstate != null && PENDING_STATES.has(rstate);
       for (const t of targets) {
         t.involved += 1;
         if (isResolved) t.resolved += 1;
+        if (isPending)  t.pending  += 1;
       }
     }
     const rating = c.conversation_rating?.rating;
@@ -162,6 +175,7 @@ export function buildIntercomDailySnapshots(
       for (const t of targets) {
         t.csatSum += rating;
         t.csatCount += 1;
+        if (rating >= 4) t.csatPositive += 1;
       }
     }
 
@@ -170,14 +184,18 @@ export function buildIntercomDailySnapshots(
 
   function accToMetrics(acc: ChAcc, prefix: string): Record<string, number | null> {
     const rate = acc.involved > 0 ? (acc.resolved / acc.involved) * 100 : 0;
-    // null when no ratings — aggregate's avg filter excludes nulls so zero-days
-    // don't drag down the channel-specific average.
-    const csat = acc.csatCount > 0 ? (acc.csatSum / acc.csatCount) * 20 : null;
+    // CSAT — industry-standard "% positive (4 or 5) of total ratings".
+    // null on zero-rating days so aggregate's avg filter skips them.
+    const csat = acc.csatCount > 0 ? (acc.csatPositive / acc.csatCount) * 100 : null;
     const hours = (acc.resolved * HANDLE_TIME_MIN_PER_RESOLUTION) / 60;
     return {
       [`${prefix}finInvolvement`]:    acc.involved,
       [`${prefix}finResolved`]:       acc.resolved,
+      [`${prefix}finPending`]:        acc.pending,
       [`${prefix}finAutomationRate`]: rate,
+      // Raw counts kept so totals can recompute precise CSAT after aggregation
+      [`${prefix}csatPositive`]:      acc.csatPositive,
+      [`${prefix}csatCount`]:         acc.csatCount,
       [`${prefix}csat`]:              csat,
       [`${prefix}hoursSaved`]:        hours,
       [`${prefix}revenueImpact`]:     hours * REVENUE_PER_HOUR,

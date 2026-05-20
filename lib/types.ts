@@ -88,6 +88,7 @@ export interface FINSnapshot {
   count?: number;
   finInvolvement: number;
   finResolved: number;
+  finPending?: number;
   finAutomationRate: number;
   csat: number;
   finProcedureUses?: number;
@@ -124,6 +125,7 @@ export interface N8NTotals {
 export interface FINTotals {
   finInvolvement: number;
   finResolved: number;
+  finPending?: number;
   finAutomationRate: number;
   csat: number;
   finProcedureUses: number;
