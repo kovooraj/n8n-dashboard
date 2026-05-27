@@ -122,10 +122,40 @@ function pct(curr: number | undefined | null, prev: number | undefined | null): 
   return Number((((curr - prev) / prev) * 100).toFixed(1));
 }
 
+// Decode the actual error reason into an actionable, user-facing line
+function explainFailure(reason: string | undefined): { driver: string; recommendation: string } {
+  if (!reason) return {
+    driver: 'AI driver analysis unavailable (no Claude reason returned).',
+    recommendation: 'Click Refresh and try again — if it persists, check Vercel logs for /api/insights/executive-summary.',
+  };
+  if (/credit balance is too low|insufficient_quota/i.test(reason)) return {
+    driver: 'AI driver analysis unavailable — Anthropic credit balance is empty.',
+    recommendation: 'Go to console.anthropic.com -> Plans & Billing and add credits (or enable auto-recharge). The dashboard will switch back to AI-generated analysis automatically on the next click.',
+  };
+  if (/ANTHROPIC_API_KEY not set/i.test(reason)) return {
+    driver: 'AI driver analysis unavailable — ANTHROPIC_API_KEY is not configured.',
+    recommendation: 'Add ANTHROPIC_API_KEY to your Vercel env vars (Settings -> Environment Variables) and redeploy.',
+  };
+  if (/rate.?limit|429/i.test(reason)) return {
+    driver: 'AI driver analysis unavailable — Anthropic rate-limit hit.',
+    recommendation: 'Wait 30-60 seconds and click Refresh. If it keeps happening you may need to upgrade your usage tier.',
+  };
+  if (/401|invalid.{0,20}api.?key|authentication/i.test(reason)) return {
+    driver: 'AI driver analysis unavailable — Anthropic API key was rejected.',
+    recommendation: 'The ANTHROPIC_API_KEY in Vercel is invalid or revoked. Generate a new one at console.anthropic.com -> API Keys and update the env var.',
+  };
+  // Unknown reason — surface it as-is, truncated
+  return {
+    driver: `AI driver analysis unavailable. Claude error: ${reason.slice(0, 160)}${reason.length > 160 ? '...' : ''}`,
+    recommendation: 'Check Vercel logs for /api/insights/executive-summary or open Anthropic console for billing/key issues.',
+  };
+}
+
 function heuristicFallback(
   period: DashboardPeriod,
   current: RequestPayload['current'],
   previous: { n8n: Record<string, number>; fin: Record<string, number>; el: Record<string, number> },
+  reason?: string,
 ) {
   const n8nDelta  = pct(current.n8n?.totalTriggers ?? 0,  previous.n8n.totalTriggers  ?? 0);
   const finDelta  = pct(current.fin?.finInvolvement ?? 0, previous.fin.finInvolvement ?? 0);
@@ -143,6 +173,7 @@ function heuristicFallback(
   if (elDelta  != null && elDelta  > 0) improvements.push(`ElevenLabs calls up ${elDelta}%.`);
   if (elDelta  != null && elDelta  < 0) regressions.push(`ElevenLabs calls down ${Math.abs(elDelta)}%.`);
 
+  const { driver, recommendation } = explainFailure(reason);
   return {
     executive: hoursDelta != null
       ? `Total hours saved ${hoursDelta >= 0 ? 'up' : 'down'} ${Math.abs(hoursDelta)}% vs previous ${period}.`
@@ -150,8 +181,8 @@ function heuristicFallback(
     overview: `Compared to the previous ${period}: ${improvements.concat(regressions).slice(0, 3).join(' ')}`.trim(),
     improvements,
     regressions,
-    drivers: ['Detailed driver analysis requires Claude API access (ANTHROPIC_API_KEY not set or call failed).'],
-    recommendations: ['Set ANTHROPIC_API_KEY in Vercel env vars to enable AI-generated recommendations.'],
+    drivers: [driver],
+    recommendations: [recommendation],
   };
 }
 
@@ -192,7 +223,7 @@ export async function POST(request: NextRequest) {
     );
 
   if (!apiKey) {
-    return wrap(heuristicFallback(period, payload.current, previous), 'heuristic', 'ANTHROPIC_API_KEY not set');
+    return wrap(heuristicFallback(period, payload.current, previous, 'ANTHROPIC_API_KEY not set'), 'heuristic', 'ANTHROPIC_API_KEY not set');
   }
 
   try {
@@ -251,6 +282,6 @@ export async function POST(request: NextRequest) {
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return wrap(heuristicFallback(period, payload.current, previous), 'heuristic', `claude-error: ${message}`);
+    return wrap(heuristicFallback(period, payload.current, previous, `claude-error: ${message}`), 'heuristic', `claude-error: ${message}`);
   }
 }
