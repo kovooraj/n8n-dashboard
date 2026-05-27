@@ -160,6 +160,13 @@ async function fetchUserList(
     cursor = data.next_cursor;
   }
 
+  // The ChatGPT API sorts by raw `messages` (user prompts), but we now report
+  // u.messages = max(api_messages, gpt+tool+connector+project). Re-sort so the
+  // leaderboard truly reflects total AI activity descending. Without this,
+  // heavy connector users (e.g. 480 actions from 116 prompts) display at the
+  // wrong rank.
+  users.sort((a, b) => b.messages - a.messages);
+
   return users;
 }
 
