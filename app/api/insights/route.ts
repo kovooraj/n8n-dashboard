@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
+import { generateInsightsJSON } from '@/lib/ai-provider';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -89,67 +89,44 @@ function heuristicFallback(p: InsightsPayload) {
 
 export async function POST(request: NextRequest) {
   const payload = (await request.json().catch(() => ({}))) as InsightsPayload;
-
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json(
-      { ...heuristicFallback(payload), source: 'heuristic', reason: 'ANTHROPIC_API_KEY not set' },
-      { headers: { 'Cache-Control': 'no-store' } },
-    );
-  }
+  const userPayload = JSON.stringify(payload, null, 2);
 
   try {
-    const client = new Anthropic({ apiKey });
-    const userPayload = JSON.stringify(payload, null, 2);
-
-    const resp = await client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 700,
-      system: [
-        {
-          type: 'text',
-          text: SYSTEM_PROMPT,
-          cache_control: { type: 'ephemeral' },
-        },
-      ],
-      messages: [
-        {
-          role: 'user',
-          content: `Analyse the dashboard snapshot below and produce the 4-section JSON. Period: ${payload.period}.\n\nPAYLOAD:\n${userPayload}`,
-        },
-      ],
+    const result = await generateInsightsJSON({
+      systemPrompt: SYSTEM_PROMPT,
+      userPrompt: `Analyse the dashboard snapshot below and produce the 4-section JSON. Period: ${payload.period}.\n\nPAYLOAD:\n${userPayload}`,
+      maxTokens: 700,
     });
-
-    const text = resp.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map((b) => b.text)
-      .join('');
-
-    // Strip code fences if the model included them despite the instruction
-    const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-    const parsed = JSON.parse(cleaned);
+    const parsed = result.json;
 
     return NextResponse.json(
       {
-        executive: parsed.executive ?? '',
-        tracking: parsed.tracking ?? '',
-        roi: parsed.roi ?? '',
-        adoption: parsed.adoption ?? '',
-        source: 'claude',
-        model: 'claude-sonnet-4-5',
-        cacheStats: {
-          cacheCreation: resp.usage?.cache_creation_input_tokens ?? 0,
-          cacheRead: resp.usage?.cache_read_input_tokens ?? 0,
-          input: resp.usage?.input_tokens ?? 0,
-          output: resp.usage?.output_tokens ?? 0,
-        },
+        executive: (parsed.executive as string) ?? '',
+        tracking:  (parsed.tracking  as string) ?? '',
+        roi:       (parsed.roi       as string) ?? '',
+        adoption:  (parsed.adoption  as string) ?? '',
+        source: result.source,
+        model: result.model,
+        // Reason set only if Claude failed but OpenAI succeeded (or vice versa)
+        ...(result.attemptErrors.length > 0
+          ? { reason: `Primary provider failed -> served via ${result.source}. ${result.attemptErrors.map((e) => `${e.provider}: ${e.reason.slice(0, 120)}`).join(' | ')}` }
+          : {}),
+        cacheStats: result.usage ? {
+          cacheCreation: result.usage.cacheCreation ?? 0,
+          cacheRead:     result.usage.cacheRead     ?? 0,
+          input:         result.usage.input         ?? 0,
+          output:        result.usage.output        ?? 0,
+        } : undefined,
       },
       { headers: { 'Cache-Control': 'no-store' } },
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
+    // Every provider failed — heuristic fallback
+    const failures = (err as Error & { allFailures?: Array<{ provider: string; reason: string }> }).allFailures;
+    const compositeReason = failures?.map((f) => `${f.provider}: ${f.reason.slice(0, 100)}`).join(' | ')
+      ?? (err instanceof Error ? err.message : 'Unknown error');
     return NextResponse.json(
-      { ...heuristicFallback(payload), source: 'heuristic', reason: `claude-error: ${message}` },
+      { ...heuristicFallback(payload), source: 'heuristic', reason: compositeReason },
       { headers: { 'Cache-Control': 'no-store' } },
     );
   }

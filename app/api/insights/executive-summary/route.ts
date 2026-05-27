@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
 import type { DashboardPeriod } from '@/lib/types';
 import {
   aggregate,
@@ -8,6 +7,7 @@ import {
   type RawSnapshot,
 } from '@/lib/aggregate';
 import { readSnapshots } from '@/lib/db-snapshots';
+import { generateInsightsJSON } from '@/lib/ai-provider';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -122,32 +122,59 @@ function pct(curr: number | undefined | null, prev: number | undefined | null): 
   return Number((((curr - prev) / prev) * 100).toFixed(1));
 }
 
-// Decode the actual error reason into an actionable, user-facing line
+// Decode the actual error reason into an actionable, user-facing line.
+// When BOTH Claude and OpenAI have failed, the reason string is a composite
+// like 'claude: ... | openai: ...' — explain each provider's status.
 function explainFailure(reason: string | undefined): { driver: string; recommendation: string } {
   if (!reason) return {
-    driver: 'AI driver analysis unavailable (no Claude reason returned).',
+    driver: 'AI driver analysis unavailable (no provider reason returned).',
     recommendation: 'Click Refresh and try again — if it persists, check Vercel logs for /api/insights/executive-summary.',
   };
-  if (/credit balance is too low|insufficient_quota/i.test(reason)) return {
-    driver: 'AI driver analysis unavailable — Anthropic credit balance is empty.',
-    recommendation: 'Go to console.anthropic.com -> Plans & Billing and add credits (or enable auto-recharge). The dashboard will switch back to AI-generated analysis automatically on the next click.',
+
+  const isComposite = /\bclaude:/i.test(reason) && /\bopenai:/i.test(reason);
+  const claudeOutOfCredit  = /credit balance is too low|insufficient_quota/i.test(reason);
+  const openaiOutOfCredit  = /openai:[^|]*?(insufficient_quota|exceeded.{0,20}quota|billing)/i.test(reason);
+  const noAnthropicKey     = /ANTHROPIC_API_KEY not set/i.test(reason);
+  const noOpenAIKey        = /OPENAI_API_KEY not set/i.test(reason);
+  const rateLimited        = /rate.?limit|429/i.test(reason);
+  const unauthorized       = /401|invalid.{0,20}api.?key|authentication/i.test(reason);
+
+  // ── Both providers down — give a composite explanation ──
+  if (isComposite) {
+    const bits: string[] = [];
+    if (claudeOutOfCredit) bits.push('Anthropic credit balance empty');
+    else if (noAnthropicKey) bits.push('Anthropic key not set');
+    if (openaiOutOfCredit) bits.push('OpenAI billing issue');
+    else if (noOpenAIKey) bits.push('OpenAI key not set');
+
+    return {
+      driver: `Both AI providers failed — ${bits.length ? bits.join(' AND ') : 'see logs for details'}.`,
+      recommendation: 'Fix whichever provider is cheaper to top up. Anthropic: console.anthropic.com -> Plans & Billing. OpenAI: platform.openai.com -> Billing. Either one working is enough — the dashboard auto-falls-back between them.',
+    };
+  }
+
+  // ── Single provider issues ──
+  if (claudeOutOfCredit) return {
+    driver: 'AI driver analysis unavailable — Anthropic credit balance is empty (and no OpenAI fallback configured).',
+    recommendation: 'Either add credits at console.anthropic.com -> Plans & Billing, OR set OPENAI_API_KEY in Vercel env vars to enable OpenAI as a fallback when Claude is unavailable.',
   };
-  if (/ANTHROPIC_API_KEY not set/i.test(reason)) return {
-    driver: 'AI driver analysis unavailable — ANTHROPIC_API_KEY is not configured.',
-    recommendation: 'Add ANTHROPIC_API_KEY to your Vercel env vars (Settings -> Environment Variables) and redeploy.',
+  if (noAnthropicKey) return {
+    driver: 'AI driver analysis unavailable — ANTHROPIC_API_KEY is not configured (and no OpenAI fallback).',
+    recommendation: 'Add ANTHROPIC_API_KEY to Vercel env vars, OR set OPENAI_API_KEY to use OpenAI as the primary provider.',
   };
-  if (/rate.?limit|429/i.test(reason)) return {
-    driver: 'AI driver analysis unavailable — Anthropic rate-limit hit.',
-    recommendation: 'Wait 30-60 seconds and click Refresh. If it keeps happening you may need to upgrade your usage tier.',
+  if (rateLimited) return {
+    driver: 'AI driver analysis unavailable — rate-limit hit on the AI provider.',
+    recommendation: 'Wait 30-60 seconds and click Refresh. If it keeps happening, upgrade your usage tier or configure the alternate provider (OPENAI_API_KEY or ANTHROPIC_API_KEY).',
   };
-  if (/401|invalid.{0,20}api.?key|authentication/i.test(reason)) return {
-    driver: 'AI driver analysis unavailable — Anthropic API key was rejected.',
-    recommendation: 'The ANTHROPIC_API_KEY in Vercel is invalid or revoked. Generate a new one at console.anthropic.com -> API Keys and update the env var.',
+  if (unauthorized) return {
+    driver: 'AI driver analysis unavailable — AI API key was rejected.',
+    recommendation: 'The API key in Vercel is invalid or revoked. Generate a new one in the provider console (Anthropic or OpenAI) and update the env var.',
   };
+
   // Unknown reason — surface it as-is, truncated
   return {
-    driver: `AI driver analysis unavailable. Claude error: ${reason.slice(0, 160)}${reason.length > 160 ? '...' : ''}`,
-    recommendation: 'Check Vercel logs for /api/insights/executive-summary or open Anthropic console for billing/key issues.',
+    driver: `AI driver analysis unavailable. Error: ${reason.slice(0, 160)}${reason.length > 160 ? '...' : ''}`,
+    recommendation: 'Check Vercel logs for /api/insights/executive-summary. If Claude is the issue, set OPENAI_API_KEY to enable fallback. If OpenAI is the issue, check platform.openai.com billing.',
   };
 }
 
@@ -204,10 +231,9 @@ export async function POST(request: NextRequest) {
   ]);
 
   const previous = { n8n: prevN8n, fin: prevFin, el: prevEl };
-  const apiKey = process.env.ANTHROPIC_API_KEY;
 
   // Common response wrapper that always includes the data the PDF needs
-  const wrap = (body: object, source: 'claude' | 'heuristic', reason?: string) =>
+  const wrap = (body: object, source: 'claude' | 'openai' | 'heuristic', reason?: string) =>
     NextResponse.json(
       {
         ...body,
@@ -222,66 +248,52 @@ export async function POST(request: NextRequest) {
       { headers: { 'Cache-Control': 'no-store' } },
     );
 
-  if (!apiKey) {
-    return wrap(heuristicFallback(period, payload.current, previous, 'ANTHROPIC_API_KEY not set'), 'heuristic', 'ANTHROPIC_API_KEY not set');
-  }
+  const userPayload = JSON.stringify(
+    { period, current: payload.current, previous, currentWindow, previousWindow },
+    null, 2,
+  );
 
   try {
-    const client = new Anthropic({ apiKey });
-    const userPayload = JSON.stringify(
-      {
-        period,
-        current: payload.current,
-        previous,
-        currentWindow,
-        previousWindow,
-      },
-      null,
-      2,
-    );
-
-    const resp = await client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 1500,
-      system: [
-        { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
-      ],
-      messages: [
-        {
-          role: 'user',
-          content: `Compare the two ${period} snapshots below and produce the executive-summary JSON.\n\nDATA:\n${userPayload}`,
-        },
-      ],
+    const result = await generateInsightsJSON({
+      systemPrompt: SYSTEM_PROMPT,
+      userPrompt: `Compare the two ${period} snapshots below and produce the executive-summary JSON.\n\nDATA:\n${userPayload}`,
+      maxTokens: 1500,
     });
+    const parsed = result.json;
 
-    const text = resp.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map((b) => b.text)
-      .join('');
-
-    const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-    const parsed = JSON.parse(cleaned);
+    // If Claude failed but OpenAI succeeded, surface the Claude error so the
+    // user knows to fix billing/quota — but still serve the OpenAI-generated
+    // analysis instead of falling back to the heuristic.
+    const claudeFailReason = result.attemptErrors.find((e) => e.provider === 'claude')?.reason;
 
     return wrap(
       {
-        executive:       parsed.executive       ?? '',
-        overview:        parsed.overview        ?? '',
+        executive:       (parsed.executive       as string) ?? '',
+        overview:        (parsed.overview        as string) ?? '',
         improvements:    Array.isArray(parsed.improvements)    ? parsed.improvements    : [],
         regressions:     Array.isArray(parsed.regressions)     ? parsed.regressions     : [],
         drivers:         Array.isArray(parsed.drivers)         ? parsed.drivers         : [],
         recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : [],
-        model: 'claude-sonnet-4-5',
-        cacheStats: {
-          cacheCreation: resp.usage?.cache_creation_input_tokens ?? 0,
-          cacheRead:     resp.usage?.cache_read_input_tokens     ?? 0,
-          input:         resp.usage?.input_tokens                ?? 0,
-          output:        resp.usage?.output_tokens               ?? 0,
-        },
+        model: result.model,
+        cacheStats: result.usage ? {
+          cacheCreation: result.usage.cacheCreation ?? 0,
+          cacheRead:     result.usage.cacheRead     ?? 0,
+          input:         result.usage.input         ?? 0,
+          output:        result.usage.output        ?? 0,
+        } : undefined,
       },
-      'claude',
+      result.source,
+      claudeFailReason ? `Claude failed -> served via ${result.source}. Claude reason: ${claudeFailReason.slice(0, 200)}` : undefined,
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    return wrap(heuristicFallback(period, payload.current, previous, `claude-error: ${message}`), 'heuristic', `claude-error: ${message}`);
+    // Every AI provider failed — use the heuristic with a smart explanation
+    const failures = (err as Error & { allFailures?: Array<{ provider: string; reason: string }> }).allFailures;
+    const compositeReason = failures?.map((f) => `${f.provider}: ${f.reason.slice(0, 100)}`).join(' | ')
+      ?? (err instanceof Error ? err.message : 'Unknown error');
+    return wrap(
+      heuristicFallback(period, payload.current, previous, compositeReason),
+      'heuristic',
+      compositeReason,
+    );
   }
 }
