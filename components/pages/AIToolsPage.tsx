@@ -38,12 +38,34 @@ interface DeptRow {
   topSpend: number;
 }
 
+type ClaudeMetric = 'chats' | 'projects' | 'artifacts' | 'messages' | 'spend';
+
 interface ClaudePayload {
   users: UserRow[];
   departments: DeptRow[];
   totals: { users: number; spendUsd: number; activeInRoster: number; activeOutsideRoster: number };
+  /** Which Claude.ai metric the values reflect — flat-rate Team plans report chats/projects/artifacts; metered plans report spend in USD. */
+  metric?: ClaudeMetric;
+  metricAttempts?: Array<{ metric: ClaudeMetric; total: number; users: number }>;
   dataAsOf?: string;
   source: 'claude-ai-internal';
+}
+
+/** Labels + formatters for the Claude metric. spend = $ amount, others = integer count. */
+function claudeMetricLabel(m?: ClaudeMetric): { unit: string; long: string; perHour: number } {
+  switch (m) {
+    case 'projects':  return { unit: 'projects',  long: 'Projects opened', perHour: 1 };   // ~1 project = 1 hour of manual work
+    case 'artifacts': return { unit: 'artifacts', long: 'Artifacts',       perHour: 2 };   // ~1 artifact = 30 min
+    case 'messages':  return { unit: 'messages',  long: 'Messages',        perHour: 15 };  // 15 msgs/hr (same heuristic as ChatGPT)
+    case 'spend':     return { unit: 'USD',       long: 'Spend (USD)',     perHour: 1/1.5 }; // $1 = 1.5h, so 1h = $0.667
+    case 'chats':
+    default:          return { unit: 'chats',     long: 'Chats',           perHour: 4 };   // ~1 chat = 15 min (4/hr)
+  }
+}
+
+function formatClaudeValue(value: number, metric?: ClaudeMetric): string {
+  if (metric === 'spend') return `$${value.toFixed(2)}`;
+  return value.toLocaleString();
 }
 
 // ── ChatGPT types (mirrors lib/chatgpt-usage.ts) ─────────────────────────────
@@ -311,7 +333,12 @@ export function AIToolsPage() {
 
   const claudeSpend = filteredUsers.reduce((s, u) => s + u.spendUsd, 0);
   const claudeActive = filteredUsers.filter((u) => u.spendUsd > 0).length;
-  const claudeHours = claudeSpend * HOURS_PER_DOLLAR;
+  // Hours-saved rate depends on which metric the API returned. Flat-rate
+  // workspaces report chats (15 min each → ~4/hr); metered workspaces report
+  // dollar spend ($1 = 1.5h). claudeMetricLabel.perHour normalises both.
+  const claudeMetric = claudeData?.metric ?? 'chats';
+  const claudeMetricMeta = claudeMetricLabel(claudeMetric);
+  const claudeHours = claudeSpend / claudeMetricMeta.perHour;
   const maxDeptSpend = Math.max(1, ...filteredDepts.map((d) => d.spendUsd));
   const maxUserSpend = Math.max(1, ...filteredUsers.map((u) => u.spendUsd));
   const unmappedUsers = filteredUsers.filter((u) => !u.inRoster && u.spendUsd > 0);
@@ -986,16 +1013,35 @@ export function AIToolsPage() {
 
         <SectionHeader eyebrow="1. AI TOOL USAGE" title="Claude usage across departments" />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
-          <BenchKPICard label="Total Claude Spend" value={claudeLoading ? '—' : formatCurrency(claudeSpend)} showInfo tooltip={`Sum of per-user Claude spend in the ${period} window.`} />
+          <BenchKPICard
+            label={`Total Claude ${claudeMetricMeta.long}`}
+            value={claudeLoading ? '—' : formatClaudeValue(claudeSpend, claudeMetric)}
+            showInfo
+            tooltip={`Sum of per-user Claude ${claudeMetricMeta.unit} in the ${period} window. ${claudeMetric === 'spend' ? 'Direct dollar spend from claude.ai analytics.' : `Your workspace is on a flat-rate plan, so claude.ai exposes ${claudeMetricMeta.unit} (not $) as the activity metric.`}`}
+          />
           <BenchKPICard
             label="Active Users"
             value={claudeLoading ? '—' : claudeActive}
             showInfo
-            tooltip={`Distinct users with any Claude spend. ${filteredUsers.length} seats on record.`}
+            tooltip={`Distinct users with any Claude ${claudeMetricMeta.unit} in the period. ${filteredUsers.length} seats on record.`}
             subBadge={<span style={{ fontSize: '0.65rem', color: '#6a8870' }}>{claudeActive}/{filteredUsers.length} seats active</span>}
           />
-          <BenchKPICard label="Estimated Hours Saved" value={claudeLoading ? '—' : formatHours(claudeHours)} showInfo tooltip={`$1 of Claude spend ≈ ${HOURS_PER_DOLLAR} hours of augmented work.`} />
-          <BenchKPICard label="Estimated Cost Savings Impact" value={claudeLoading ? '—' : formatCurrency(claudeHours * HOURLY_RATE)} showInfo tooltip={`Hours saved × $${HOURLY_RATE}/hr.`} />
+          <BenchKPICard
+            label="Estimated Hours Saved"
+            value={claudeLoading ? '—' : formatHours(claudeHours)}
+            showInfo
+            tooltip={
+              claudeMetric === 'spend'
+                ? `$1 of Claude spend ≈ ${HOURS_PER_DOLLAR} hours of augmented work.`
+                : `~${claudeMetricMeta.perHour} ${claudeMetricMeta.unit} per hour of manual effort saved.`
+            }
+          />
+          <BenchKPICard
+            label="Estimated Cost Savings Impact"
+            value={claudeLoading ? '—' : formatCurrency(claudeHours * HOURLY_RATE)}
+            showInfo
+            tooltip={`Hours saved × $${HOURLY_RATE}/hr loaded labour rate.`}
+          />
         </div>
 
         {unmappedUsers.length > 0 && (

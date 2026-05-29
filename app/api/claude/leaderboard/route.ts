@@ -46,13 +46,22 @@ interface RankingsResp {
   data_as_of?: string;
 }
 
+/**
+ * Claude.ai supports several `metric` values on the rankings endpoint.
+ * On flat-rate Team/Enterprise workspaces, `spend` is always 0 — usage is
+ * tracked via `chats`, `projects`, and `artifacts` instead. We auto-detect
+ * which one has data and use that.
+ */
+type ClaudeMetric = 'chats' | 'spend' | 'projects' | 'artifacts' | 'messages';
+
 async function fetchRankings(
   orgId: string,
   sessionKey: string,
   startAt: string,
+  metric: ClaudeMetric = 'chats',
   limit = 100, // Claude.ai API caps limit at 100; bumping higher returns HTTP 400.
 ): Promise<RankingsResp> {
-  const url = `https://claude.ai/api/organizations/${orgId}/analytics/users/rankings?metric=spend&start_date=${startAt}&limit=${limit}`;
+  const url = `https://claude.ai/api/organizations/${orgId}/analytics/users/rankings?metric=${metric}&start_date=${startAt}&limit=${limit}`;
   const resp = await fetch(url, {
     headers: {
       cookie: `sessionKey=${sessionKey}`,
@@ -78,6 +87,8 @@ export interface UserRow {
   department: string;   // "Unmapped" if email not in roster
   companies: Company[]; // ['sinalite','willowpack'] if not in roster
   seatTier: string;
+  /** Generic metric value (chats, projects, artifacts, or spend in USD). Field
+   *  name kept as `spendUsd` for back-compat with the dashboard UI. */
   spendUsd: number;
   inRoster: boolean;
 }
@@ -100,6 +111,10 @@ export interface LeaderboardPayload {
     activeInRoster: number;
     activeOutsideRoster: number;
   };
+  /** Which Claude.ai metric the values reflect — chats / projects / artifacts / spend. */
+  metric: ClaudeMetric;
+  /** Reasons each metric was skipped (returned 0 / failed) before we landed on `metric`. */
+  metricAttempts?: Array<{ metric: ClaudeMetric; total: number; users: number }>;
   dataAsOf?: string;
   source: 'claude-ai-internal';
   window: { startingAt: string; endingAt: string };
@@ -118,11 +133,43 @@ async function buildPayload(
   orgId: string,
   sessionKey: string,
   period: DashboardPeriod,
+  preferredMetric?: ClaudeMetric,
 ): Promise<LeaderboardPayload> {
   const startingAt = startDate(period);
   const endingAt = new Date().toISOString().slice(0, 10);
-  const resp = await fetchRankings(orgId, sessionKey, startingAt);
-  const raw = resp.users ?? [];
+
+  // Adaptive metric selection — Team/Enterprise plans return 0 for `spend`
+  // because billing is flat-rate per seat; usage is tracked via chats /
+  // projects / artifacts instead. Try in order until one returns non-zero
+  // totals. Caller can force a specific metric via preferredMetric.
+  const tryOrder: ClaudeMetric[] = preferredMetric
+    ? [preferredMetric]
+    : ['chats', 'projects', 'artifacts', 'messages', 'spend'];
+
+  let resp: RankingsResp | null = null;
+  let usedMetric: ClaudeMetric = tryOrder[0];
+  const attempts: Array<{ metric: ClaudeMetric; total: number; users: number }> = [];
+
+  for (const metric of tryOrder) {
+    try {
+      const candidate = await fetchRankings(orgId, sessionKey, startingAt, metric);
+      const users = candidate.users ?? [];
+      const total = users.reduce((s, u) => s + (u.value ?? 0), 0);
+      attempts.push({ metric, total, users: users.length });
+      if (total > 0 || preferredMetric) {
+        resp = candidate;
+        usedMetric = metric;
+        break;
+      }
+      // total === 0 for this metric — keep `resp` as fallback in case all are zero
+      if (!resp) { resp = candidate; usedMetric = metric; }
+    } catch {
+      attempts.push({ metric, total: 0, users: 0 });
+      // skip to next metric on failure
+    }
+  }
+
+  const raw = resp?.users ?? [];
 
   // Build per-user rows, joining with roster.
   const byEmail = new Map<string, UserRow>();
@@ -200,22 +247,29 @@ async function buildPayload(
     users,
     departments,
     totals,
-    dataAsOf: resp.data_as_of,
+    metric: usedMetric,
+    metricAttempts: attempts,
+    dataAsOf: resp?.data_as_of,
     source: 'claude-ai-internal',
     window: { startingAt, endingAt },
   };
 }
 
 const getCached = unstable_cache(
-  async (period: DashboardPeriod, orgId: string, sessionKey: string) =>
-    buildPayload(orgId, sessionKey, period),
-  ['claude-leaderboard-v2'],
+  async (period: DashboardPeriod, orgId: string, sessionKey: string, metric: string | undefined) =>
+    buildPayload(orgId, sessionKey, period, metric as ClaudeMetric | undefined),
+  ['claude-leaderboard-v3-adaptive-metric'],
   { revalidate: CACHE_REVALIDATE_SEC, tags: [CACHE_TAG] },
 );
+
+const VALID_METRICS: ClaudeMetric[] = ['chats', 'projects', 'artifacts', 'messages', 'spend'];
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const period = (searchParams.get('period') ?? 'weekly') as DashboardPeriod;
+  const metricParam = searchParams.get('metric') ?? undefined;
+  const metric = metricParam && (VALID_METRICS as string[]).includes(metricParam)
+    ? metricParam as ClaudeMetric : undefined;
 
   const sessionKey = process.env.CLAUDE_SESSION_KEY;
   const orgId = process.env.CLAUDE_ORG_ID;
@@ -235,7 +289,9 @@ export async function GET(request: NextRequest) {
   if (forceRefresh) revalidateTag(CACHE_TAG, 'max');
 
   try {
-    const dbKey = `claude-leaderboard-${period}`;
+    // DB key includes metric so explicit overrides ('?metric=projects')
+    // don't clobber the default-adaptive payload stored under no suffix.
+    const dbKey = `claude-leaderboard-${period}${metric ? `-${metric}` : ''}`;
     const today = todayUTC();
 
     if (!forceRefresh && process.env.NEXT_PUBLIC_SUPABASE_URL) {
@@ -247,7 +303,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const payload = await getCached(period, orgId, sessionKey);
+    const payload = await getCached(period, orgId, sessionKey, metric);
 
     if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
       writePayload(dbKey, today, payload).catch(console.error);
