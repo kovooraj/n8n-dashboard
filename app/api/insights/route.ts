@@ -23,13 +23,14 @@ export const revalidate = 0;
  * instructions) is cached so repeated calls across periods stay cheap.
  */
 
-const SYSTEM_PROMPT = `You are the automation-performance analyst for a printing / packaging operation that runs three in-house AI tools: n8n workflows (internal automations), Intercom FIN (AI support chat), and ElevenLabs (AI inbound voice agent). You are writing for an engineering / ops lead who knows the business intimately — they do NOT need definitions of FIN, deflection, or CSAT.
+const SYSTEM_PROMPT = `You are the automation-performance analyst for a printing / packaging operation that runs five in-house AI tools: n8n workflows (internal automations), Intercom FIN (AI support chat), ElevenLabs (AI inbound voice agent), Claude (team AI assistant via Claude.ai), and ChatGPT Enterprise. You are writing for an engineering / ops lead who knows the business intimately — they do NOT need definitions of FIN, deflection, or CSAT.
 
 Writing style requirements — this is the most important part:
 - Be SPECIFIC. Never write generic platitudes like "improve adoption" or "expand knowledge base." Always ground recommendations in the actual numbers in the payload.
 - Name the exact bottleneck. If FIN deflection is 28%, say "FIN deflection is 28% — 12 points below the 40% target we set; the gap is ~N conversations that escalated unnecessarily this {period}."
 - Name the exact failing workflow by name when it appears in the data.
 - Quantify the opportunity in $ or hours whenever you can compute it from the payload.
+- For AI tool adoption (Claude + ChatGPT): comment on active user counts, hours saved, and whether adoption is growing or stagnant. Flag if either tool has zero or very low active users — that is the highest-ROI enablement opportunity.
 - Avoid the word "leverage" and other consultancy jargon.
 - Keep each section to 2–3 sentences. No headings inside sections.
 - Fiscal year starts in August (Q1 FY = Aug–Oct, Q2 = Nov–Jan, Q3 = Feb–Apr, Q4 = May–Jul). When referring to quarters, use fiscal quarters.
@@ -40,7 +41,7 @@ Output format: JSON ONLY, no prose outside JSON, no code fences. Shape:
   "executive": "one-sentence executive summary (under 30 words) of what matters most right now",
   "tracking": "2–3 sentences on project delivery — in-progress, blockers, high-priority items by name",
   "roi": "2–3 sentences on ROI + bottlenecks — failing workflows by name, FIN/EL rates vs target, quantified opportunity",
-  "adoption": "2–3 sentences on volume + adoption — which tool is under-used, which is trending, a concrete next enablement step"
+  "adoption": "2–3 sentences on volume + adoption — cover n8n/FIN/EL AND Claude/ChatGPT active users; flag the lowest-adoption tool with a concrete next step"
 }`;
 
 interface InsightsPayload {
@@ -60,6 +61,10 @@ interface InsightsPayload {
     inProgress: number;
     complete: number;
     highUrgent: string[];
+  };
+  aiTools?: {
+    claude:  { activeUsers: number; hoursSaved: number; revenueImpact: number };
+    chatgpt: { activeUsers: number; hoursSaved: number; revenueImpact: number; totalMessages: number };
   };
 }
 
@@ -83,7 +88,7 @@ function heuristicFallback(p: InsightsPayload) {
     roi: fail > 0
       ? `Failing workflows (${failNames || 'see list'}) are burning automation hours. FIN deflecting ${finRate}% autonomously — 40%+ target; every 1pt of FIN resolution ≈ ${Math.round((p.fin?.finInvolvement ?? 0) / 100)} fewer escalations this ${period}.`
       : `FIN at ${finRate}% automation rate, voice agent deflecting ${deflection}%. Biggest $ lever: raise FIN +${Math.max(0, 40 - finRate)}pts by covering the top escalation topics.`,
-    adoption: `${(p.n8n?.totalTriggers ?? 0).toLocaleString()} n8n triggers + ${(p.fin?.finInvolvement ?? 0).toLocaleString()} FIN chats + ${(p.el?.calls ?? 0).toLocaleString()} calls this ${period}. Identify the tool with lowest volume relative to TAM and run a targeted enablement session.`,
+    adoption: `${(p.n8n?.totalTriggers ?? 0).toLocaleString()} n8n triggers + ${(p.fin?.finInvolvement ?? 0).toLocaleString()} FIN chats + ${(p.el?.calls ?? 0).toLocaleString()} calls this ${period}. Claude had ${p.aiTools?.claude?.activeUsers ?? 0} active users; ChatGPT had ${p.aiTools?.chatgpt?.activeUsers ?? 0} active users — the lower of the two is the highest-ROI enablement target.`,
   };
 }
 

@@ -71,7 +71,8 @@ interface OverviewPageData {
   projects: ClickUpTask[];
   liveWorkflows: WorkflowHealthData[];
   claudeSpendUsd: number;
-  chatgptTotals: { hoursSaved: number; revenueImpact: number } | null;
+  claudeActiveUsers: number;
+  chatgptTotals: { hoursSaved: number; revenueImpact: number; activeUsers: number; totalMessages: number } | null;
 }
 
 function periodLabelFor(p: DashboardPeriod): string {
@@ -117,8 +118,14 @@ export function OverviewPage() {
         projects:      cuRes.status   === 'fulfilled' ? (cuRes.value.tasks      ?? []) as ClickUpTask[] : [],
         liveWorkflows: dashRes.status === 'fulfilled' ? (dashRes.value.workflows ?? []) as WorkflowHealthData[] : [],
         // AI tools — graceful: if API not configured they return an error field, we default to 0
-        claudeSpendUsd: !claudeVal?.error ? (claudeVal?.totals?.spendUsd ?? 0) : 0,
-        chatgptTotals:  !chatgptVal?.error ? (chatgptVal?.totals ?? null) : null,
+        claudeSpendUsd:    !claudeVal?.error ? (claudeVal?.totals?.spendUsd    ?? 0) : 0,
+        claudeActiveUsers: !claudeVal?.error ? (claudeVal?.totals?.users        ?? 0) : 0,
+        chatgptTotals: !chatgptVal?.error ? {
+          hoursSaved:    chatgptVal?.totals?.hoursSaved    ?? 0,
+          revenueImpact: chatgptVal?.totals?.revenueImpact ?? 0,
+          activeUsers:   chatgptVal?.totals?.activeUsers   ?? 0,
+          totalMessages: chatgptVal?.totals?.totalMessages ?? 0,
+        } : null,
       };
     },
     [period],
@@ -134,10 +141,13 @@ export function OverviewPage() {
   const liveWorkflows = pageData?.liveWorkflows ?? [];
 
   // ── AI tools hours/revenue (Claude + ChatGPT) ─────────────────
-  const claudeHours   = (pageData?.claudeSpendUsd ?? 0) * CLAUDE_HOURS_PER_DOLLAR;
-  const claudeRevenue = claudeHours * HOURLY_RATE;
-  const chatgptHours  = pageData?.chatgptTotals?.hoursSaved   ?? 0;
-  const chatgptRevenue = pageData?.chatgptTotals?.revenueImpact ?? 0;
+  const claudeHours        = (pageData?.claudeSpendUsd ?? 0) * CLAUDE_HOURS_PER_DOLLAR;
+  const claudeRevenue      = claudeHours * HOURLY_RATE;
+  const claudeActiveUsers  = pageData?.claudeActiveUsers ?? 0;
+  const chatgptHours       = pageData?.chatgptTotals?.hoursSaved    ?? 0;
+  const chatgptRevenue     = pageData?.chatgptTotals?.revenueImpact ?? 0;
+  const chatgptActiveUsers = pageData?.chatgptTotals?.activeUsers   ?? 0;
+  const chatgptMessages    = pageData?.chatgptTotals?.totalMessages  ?? 0;
 
   // ── Combined totals for the selected period ──────────────────
   const totalTriggers =
@@ -234,6 +244,10 @@ export function OverviewPage() {
         inProgress: inProgressProjects.length,
         complete: completedProjects.length,
         highUrgent: highUrgentInProg.slice(0, 5).map((p) => p.name),
+      },
+      aiTools: {
+        claude:  { activeUsers: claudeActiveUsers,  hoursSaved: Math.round(claudeHours),  revenueImpact: Math.round(claudeRevenue) },
+        chatgpt: { activeUsers: chatgptActiveUsers, hoursSaved: Math.round(chatgptHours), revenueImpact: Math.round(chatgptRevenue), totalMessages: chatgptMessages },
       },
     };
     fetch('/api/insights', {
@@ -847,12 +861,28 @@ export function OverviewPage() {
                 </p>
               )}
             </div>
-            <div style={{ flexShrink: 0, textAlign: 'right' }}>
-              <p style={{ fontSize: '0.65rem', color: '#6a8870', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 3 }}>Total Triggers</p>
-              {loading
-                ? <div className="skeleton" style={{ height: 22, width: 80, borderRadius: 4 }} />
-                : <p style={{ fontSize: '1.3rem', fontWeight: 700, color: '#e4ede6' }}>{totalTriggers.toLocaleString()}</p>
-              }
+            <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexShrink: 0 }}>
+              <div style={{ textAlign: 'right' }}>
+                <p style={{ fontSize: '0.65rem', color: '#d4912a', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 3 }}>Claude Active</p>
+                {loading
+                  ? <div className="skeleton" style={{ height: 22, width: 48, borderRadius: 4 }} />
+                  : <p style={{ fontSize: '1.3rem', fontWeight: 700, color: '#e4ede6' }}>{claudeActiveUsers}</p>
+                }
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <p style={{ fontSize: '0.65rem', color: '#10a37f', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 3 }}>ChatGPT Active</p>
+                {loading
+                  ? <div className="skeleton" style={{ height: 22, width: 48, borderRadius: 4 }} />
+                  : <p style={{ fontSize: '1.3rem', fontWeight: 700, color: '#e4ede6' }}>{chatgptActiveUsers}</p>
+                }
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <p style={{ fontSize: '0.65rem', color: '#6a8870', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 3 }}>Total Triggers</p>
+                {loading
+                  ? <div className="skeleton" style={{ height: 22, width: 60, borderRadius: 4 }} />
+                  : <p style={{ fontSize: '1.3rem', fontWeight: 700, color: '#e4ede6' }}>{totalTriggers.toLocaleString()}</p>
+                }
+              </div>
             </div>
           </div>
         </div>
