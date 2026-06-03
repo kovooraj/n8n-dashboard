@@ -341,7 +341,11 @@ export function AIToolsPage() {
   const claudeHours = claudeSpend / claudeMetricMeta.perHour;
   const maxDeptSpend = Math.max(1, ...filteredDepts.map((d) => d.spendUsd));
   const maxUserSpend = Math.max(1, ...filteredUsers.map((u) => u.spendUsd));
-  const unmappedUsers = filteredUsers.filter((u) => !u.inRoster && u.spendUsd > 0);
+  const unmappedUsers = filteredUsers.filter((u) =>
+    !u.inRoster &&
+    !rosterOverrides[u.email.toLowerCase()] &&
+    u.spendUsd > 0
+  );
 
   // ── ChatGPT department rollup ────────────────────────────────────────────────
   interface ChatGPTDeptRow {
@@ -539,7 +543,7 @@ export function AIToolsPage() {
         {/* Manage Roster */}
         <SectionHeader eyebrow="SETTINGS" title="Manage roster assignments" />
         <p style={{ fontSize: '0.75rem', color: '#6a8870', marginBottom: 16, lineHeight: 1.5 }}>
-          Every user detected in <strong style={{ color: '#b8d4bd' }}>TEAM roster</strong>, <strong style={{ color: '#d4912a' }}>Claude</strong>, or <strong style={{ color: '#10a37f' }}>ChatGPT</strong> for the selected period is listed below — badges show which tools each person has access to. Edit their department and company assignment and save. <em>Reset</em> clears a saved override; the row stays as long as the user is still detected by any of the three sources.
+          Every user detected in <strong style={{ color: '#d4912a' }}>Claude</strong> or <strong style={{ color: '#10a37f' }}>ChatGPT</strong> for the selected period is listed below — new accounts appear automatically. Edit their department and company assignment and save. <em>Reset</em> clears a saved override; the row stays as long as the user is still detected by either source.
         </p>
         {/* Roster table — rows inlined in map() to avoid nested-component remount on every keystroke */}
         {(() => {
@@ -582,7 +586,9 @@ export function AIToolsPage() {
 
           // Sort: team members first (alpha), then everyone else (alpha)
           entries.sort((a, b) => {
-            if (a.inTeam !== b.inTeam) return a.inTeam ? -1 : 1;
+            const aAssigned = a.inTeam || !!rosterOverrides[a.email];
+            const bAssigned = b.inTeam || !!rosterOverrides[b.email];
+            if (aAssigned !== bAssigned) return aAssigned ? -1 : 1;
             return a.name.localeCompare(b.name);
           });
 
@@ -613,7 +619,6 @@ export function AIToolsPage() {
                 <div style={{ minWidth: 0 }}>
                   <p style={{ fontSize: '0.82rem', fontWeight: 600, color: '#e4ede6', margin: 0, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     {name}
-                    {inTeam       && <Badge label="TEAM"    color="#b8d4bd" />}
                     {hasClaude    && <Badge label="CLAUDE"  color="#d4912a" />}
                     {hasChatGPT   && <Badge label="CHATGPT" color="#10a37f" />}
                     {isOverridden && <Badge label="CUSTOM"  color="#4a9eca" />}
@@ -682,7 +687,7 @@ export function AIToolsPage() {
               }}>
                 <span><strong style={{ color: '#e4ede6' }}>{totalRows}</strong> total users</span>
                 <span>·</span>
-                <span><strong style={{ color: '#b8d4bd' }}>{teamCount}</strong> in TEAM roster</span>
+                <span><strong style={{ color: '#b8d4bd' }}>{entries.filter((e) => e.inTeam || !!rosterOverrides[e.email]).length}</strong> assigned</span>
                 <span>·</span>
                 <span><strong style={{ color: '#d4912a' }}>{claudeCount}</strong> with Claude access</span>
                 <span>·</span>
@@ -723,7 +728,7 @@ export function AIToolsPage() {
           {rosterSaveStatus === 'error' && <span style={{ fontSize: '0.75rem', color: '#e05858', fontWeight: 600 }}>✗ Save failed — check Supabase connection</span>}
         </div>
         <p style={{ fontSize: '0.68rem', color: '#4a6450', marginTop: 10, lineHeight: 1.5 }}>
-          SL = SinaLite &nbsp;·&nbsp; WP = Willowpack. Overrides stored in Supabase, applied immediately to all department breakdowns. &quot;Reset&quot; reverts roster members to their static default; ChatGPT-only users return to &quot;Unmapped&quot;.
+          SL = SinaLite &nbsp;·&nbsp; WP = Willowpack. Overrides stored in Supabase, applied immediately to all department breakdowns. &quot;Reset&quot; clears the saved assignment — the user returns to &quot;Unmapped&quot; until reassigned.
         </p>
       </>
     );
@@ -1052,7 +1057,7 @@ export function AIToolsPage() {
           }}>
             <strong style={{ color: '#d4912a' }}>{unmappedUsers.length} active user{unmappedUsers.length === 1 ? '' : 's'} not in roster:</strong>{' '}
             {unmappedUsers.slice(0, 5).map((u) => u.email).join(', ')}
-            {unmappedUsers.length > 5 ? `, +${unmappedUsers.length - 5} more` : ''}. Add them to <code style={{ color: '#b8d4bd' }}>lib/aiToolsTeam.ts</code>.
+            {unmappedUsers.length > 5 ? `, +${unmappedUsers.length - 5} more` : ''}. Assign them in the <strong>All Tools → Manage roster</strong> section.
           </div>
         )}
 
@@ -1119,7 +1124,7 @@ export function AIToolsPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                   <span style={{ fontSize: '0.85rem', color: '#e4ede6', fontWeight: 500 }}>
                     {u.name}
-                    {!u.inRoster && <span style={{ marginLeft: 6, fontSize: '0.6rem', color: '#d4912a', fontWeight: 700 }}>UNMAPPED</span>}
+                    {!u.inRoster && !rosterOverrides[u.email.toLowerCase()] && <span style={{ marginLeft: 6, fontSize: '0.6rem', color: '#d4912a', fontWeight: 700 }}>UNMAPPED</span>}
                   </span>
                 </div>
                 <span style={{ fontSize: '0.72rem', color: '#8aad90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.email}</span>
@@ -1143,7 +1148,7 @@ export function AIToolsPage() {
           )}
         </div>
         <p style={{ fontSize: '0.7rem', color: '#6a8870', marginTop: 16, lineHeight: 1.5 }}>
-          Source: claude.ai internal analytics · {TEAM.length}-person roster in <code style={{ color: '#8aad90' }}>lib/aiToolsTeam.ts</code> · cached 25h · refreshed daily via Vercel cron.
+          Source: claude.ai internal analytics · cached 25h · refreshed daily via Vercel cron.
         </p>
       </>
     );
