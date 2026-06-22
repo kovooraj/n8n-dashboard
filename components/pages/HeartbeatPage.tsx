@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useState } from 'react';
-import { Activity, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Activity, RefreshCw, SlidersHorizontal, Check } from 'lucide-react';
 import {
   BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -22,6 +22,8 @@ interface HeartbeatData {
   dashboards: { key: string; label: string; brand: string | null; visits: number; users: number; ai: number; hours: number; live: boolean }[];
   activity: { key: string; label: string; value: number }[];
   topUsers: { name: string; email: string; role: string; sessions: number; events: number; ai: number; hours: number }[];
+  allUsers: { id: string; name: string; email: string; role: string }[];
+  excludedUserIds: string[];
   eventCount: number;
 }
 interface KV { value: number; delta: number }
@@ -47,9 +49,30 @@ export function HeartbeatPage() {
   const d = data;
   const notConfigured = d && d.configured === false;
 
+  // ---- exclude-users settings ----
+  const [showSettings, setShowSettings] = useState(false);
+  const [excl, setExcl] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (d?.excludedUserIds) setExcl(new Set(d.excludedUserIds)); }, [d?.excludedUserIds]);
+
+  const toggleExcl = (id: string) => setExcl((prev) => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
+  const saveSettings = async () => {
+    setSaving(true);
+    try {
+      await fetch('/api/heartbeat/settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ excludedUserIds: [...excl] }),
+      });
+      setShowSettings(false);
+      refresh();
+    } finally { setSaving(false); }
+  };
+
   return (
     <div style={{ height: '100%', overflowY: 'auto' }} className="custom-scroll">
-      <div style={{ maxWidth: 1180, margin: '0 auto', padding: '22px 26px' }}>
+      <div style={{ maxWidth: '100%', margin: '0 auto', padding: '22px 32px' }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 6 }}>
           <div>
@@ -62,10 +85,16 @@ export function HeartbeatPage() {
               {d ? ` · ${d.totalUsers} users · ${d.eventCount.toLocaleString()} events tracked` : ''}
             </p>
           </div>
-          <button onClick={refresh} disabled={refreshing}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '7px 13px', borderRadius: 7, border: '1px solid #1a2c1d', background: '#0d1810', color: '#6a8870', cursor: 'pointer' }}>
-            <RefreshCw size={11} className={refreshing ? 'animate-spin' : ''} /> Refresh
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setShowSettings((s) => !s)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '7px 13px', borderRadius: 7, cursor: 'pointer', border: `1px solid ${showSettings || excl.size ? '#3dba62' : '#1a2c1d'}`, background: showSettings ? '#112014' : '#0d1810', color: showSettings || excl.size ? '#e4ede6' : '#6a8870' }}>
+              <SlidersHorizontal size={11} /> Settings{excl.size ? ` · ${excl.size} excluded` : ''}
+            </button>
+            <button onClick={refresh} disabled={refreshing}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '7px 13px', borderRadius: 7, border: '1px solid #1a2c1d', background: '#0d1810', color: '#6a8870', cursor: 'pointer' }}>
+              <RefreshCw size={11} className={refreshing ? 'animate-spin' : ''} /> Refresh
+            </button>
+          </div>
         </div>
 
         {/* Controls */}
@@ -80,6 +109,38 @@ export function HeartbeatPage() {
             ))}
           </div>
         </div>
+
+        {showSettings && d && (
+          <div style={{ background: '#0d1810', border: '1px solid #3dba62', borderRadius: 10, padding: '16px 18px', marginBottom: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+              <h3 style={{ fontSize: '0.85rem', margin: 0, fontWeight: 600 }}>Exclude users from metrics</h3>
+              <button onClick={saveSettings} disabled={saving}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '7px 14px', borderRadius: 7, border: 'none', background: '#3dba62', color: '#050d07', cursor: 'pointer', opacity: saving ? 0.6 : 1 }}>
+                <Check size={12} /> {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            <p style={{ color: '#6a8870', fontSize: '0.72rem', margin: '0 0 12px' }}>
+              Checked users are removed from every metric on this page (visits, AI runs, hours saved, charts). Use this to exclude your own test usage.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 }}>
+              {d.allUsers.map((u) => {
+                const on = excl.has(u.id);
+                return (
+                  <button key={u.id} onClick={() => toggleExcl(u.id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', padding: '9px 11px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${on ? '#3dba62' : '#1a2c1d'}`, background: on ? 'rgba(61,186,98,0.08)' : '#112014' }}>
+                    <span style={{ width: 16, height: 16, borderRadius: 4, flexShrink: 0, border: `1px solid ${on ? '#3dba62' : '#2c4231'}`, background: on ? '#3dba62' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {on && <Check size={11} color="#050d07" />}
+                    </span>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ display: 'block', fontSize: '0.78rem', color: '#e4ede6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.name}</span>
+                      <span style={{ display: 'block', fontSize: '0.66rem', color: '#6a8870', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.email}{on ? ' · excluded' : ''}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {notConfigured && (
           <Banner text={`Supabase not configured: ${d?.error || 'set NEXT_PUBLIC_SUPABASE_URL + SUPABASE_ANON_KEY'}`} />

@@ -95,7 +95,7 @@ export async function GET(req: NextRequest) {
   const sinceISO = new Date(buckets[0].start).toISOString();
 
   // Pull all events in window (internal volume is small) + the user roster.
-  const [{ data: evRows, error: evErr }, { data: userRows }] = await Promise.all([
+  const [{ data: evRows, error: evErr }, { data: userRows }, { data: settingRows }] = await Promise.all([
     supabase
       .from('heartbeat_events')
       .select('user_id,user_email,session_id,event_type,view,brand,minutes_saved,created_at')
@@ -103,12 +103,18 @@ export async function GET(req: NextRequest) {
       .order('created_at', { ascending: true })
       .limit(100000),
     supabase.from('heartbeat_users').select('id,email,full_name,role,last_login,allowed_views'),
+    supabase.from('heartbeat_activity_settings').select('value').eq('key', 'excluded_users'),
   ]);
 
   if (evErr) return NextResponse.json({ error: evErr.message, configured: true }, { status: 200 });
 
+  // Users excluded from all metrics (e.g. admins testing their own usage).
+  const excludedUserIds: string[] = Array.isArray(settingRows?.[0]?.value) ? settingRows[0].value : [];
+  const excluded = new Set(excludedUserIds);
+
   let events = (evRows || []) as Ev[];
   if (brand !== 'all') events = events.filter((e) => (e.brand || null) === brand);
+  if (excluded.size) events = events.filter((e) => !(e.user_id && excluded.has(e.user_id)));
 
   // ---- per-bucket series (visits + active users) ----------------------------
   const bucketOf = (t: number) => buckets.find((b) => t >= b.start && t < b.end);
@@ -205,10 +211,18 @@ export async function GET(req: NextRequest) {
   }
 
   const userMeta = new Map((userRows || []).map((u: any) => [u.id, u]));
-  const dashboards = DASH_ORDER
+
+  // Auto-discover dashboards: known ones in fixed order, then any NEW view key
+  // that shows up in events (so adding a dashboard to heartbeatOS needs no change
+  // here — it appears automatically with a prettified label).
+  const prettify = (k: string) => k.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const discovered = [...byView.keys()].filter((k) => k && k !== 'other' && !DASH_ORDER.includes(k));
+  const allViewKeys = [...DASH_ORDER, ...discovered];
+
+  const dashboards = allViewKeys
     .map((key) => {
       const bv = byView.get(key);
-      const meta = DASH_LABELS[key] || { label: key, brand: null };
+      const meta = DASH_LABELS[key] || { label: prettify(key), brand: null };
       if (brand !== 'all' && meta.brand !== brand) return null;
       return {
         key, label: meta.label, brand: meta.brand,
@@ -256,6 +270,8 @@ export async function GET(req: NextRequest) {
     dashboards,
     activity,
     topUsers,
+    allUsers: (userRows || []).map((u: any) => ({ id: u.id, name: u.full_name || u.email, email: u.email, role: u.role })),
+    excludedUserIds,
     eventCount: events.length,
     asOf: now.toISOString(),
   });
