@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, RefreshCw, SlidersHorizontal, Check } from 'lucide-react';
+import { Heart, RefreshCw, SlidersHorizontal, Check } from 'lucide-react';
 import {
   BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -77,7 +77,7 @@ export function HeartbeatPage() {
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 6 }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-              <Activity size={18} color="#3dba62" />
+              <Heart size={18} color="#3dba62" />
               <h1 style={{ fontSize: '1.35rem', fontWeight: 700, letterSpacing: '-0.3px', margin: 0 }}>HeartbeatOS Activity</h1>
             </div>
             <p style={{ color: '#6a8870', fontSize: '0.8rem', margin: '4px 0 0' }}>
