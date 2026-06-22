@@ -8,8 +8,9 @@ import { N8NPage } from '@/components/pages/N8NPage';
 import { FINPage } from '@/components/pages/FINPage';
 import { ElevenLabsPage } from '@/components/pages/ElevenLabsPage';
 import { AIToolsPage } from '@/components/pages/AIToolsPage';
+import { HeartbeatPage } from '@/components/pages/HeartbeatPage';
 
-export type PageId = 'overview' | 'n8n' | 'fin' | 'elevenlabs' | 'ai-tools';
+export type PageId = 'overview' | 'n8n' | 'fin' | 'elevenlabs' | 'ai-tools' | 'heartbeat';
 
 export function Shell() {
   const [activePage, setActivePage] = useState<PageId>('overview');
@@ -39,6 +40,7 @@ export function Shell() {
           {activePage === 'fin' && <FINPage />}
           {activePage === 'elevenlabs' && <ElevenLabsPage />}
           {activePage === 'ai-tools' && <AIToolsPage />}
+          {activePage === 'heartbeat' && <HeartbeatPage />}
         </div>
       </div>
     </div>
