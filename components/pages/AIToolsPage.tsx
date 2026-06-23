@@ -1064,7 +1064,7 @@ export function AIToolsPage() {
         <SectionHeader eyebrow="2. DEPARTMENT BREAKDOWN" title="Usage by department" />
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden', marginBottom: 28 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.6fr 1fr 1.4fr 1.1fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
-            {['Department', 'Company', 'Users', 'Spend', 'Share', 'Top User'].map((h) => (
+            {['Department', 'Company', 'Users', claudeMetricMeta.long, 'Share', 'Top User'].map((h) => (
               <span key={h} style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
             ))}
           </div>
@@ -1085,7 +1085,7 @@ export function AIToolsPage() {
                 <span style={{ fontSize: '0.85rem', color: '#e4ede6', fontWeight: 500 }}>{d.department}</span>
                 <span style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: cl.color, padding: '2px 8px', background: `${cl.color}18`, border: `1px solid ${cl.color}40`, borderRadius: 4, justifySelf: 'start' }}>{cl.text}</span>
                 <span style={{ fontSize: '0.85rem', color: '#8aad90' }}>{d.users}</span>
-                <span style={{ fontSize: '0.85rem', color: '#e4ede6', fontWeight: 600 }}>{formatCurrency(d.spendUsd)}</span>
+                <span style={{ fontSize: '0.85rem', color: '#e4ede6', fontWeight: 600 }}>{formatClaudeValue(d.spendUsd, claudeMetric)}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div style={{ flex: 1, height: 6, background: '#112014', borderRadius: 3, overflow: 'hidden' }}>
                     <div style={{ width: `${pct}%`, height: '100%', background: cl.color }} />
@@ -1093,7 +1093,7 @@ export function AIToolsPage() {
                   <span style={{ fontSize: '0.7rem', color: '#6a8870', width: 36, textAlign: 'right' }}>{Math.round(pct)}%</span>
                 </div>
                 <span style={{ fontSize: '0.8rem', color: '#8aad90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {d.topSpend > 0 ? `${d.topUser} · ${formatCurrency(d.topSpend)}` : '—'}
+                  {d.topSpend > 0 ? `${d.topUser} · ${formatClaudeValue(d.topSpend, claudeMetric)}` : '—'}
                 </span>
               </div>
             );
@@ -1103,7 +1103,7 @@ export function AIToolsPage() {
         <SectionHeader eyebrow="3. SEAT ROSTER" title="Team members by department" />
         <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 8, overflow: 'hidden' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '48px 1.5fr 1fr 1fr 1fr 1.2fr', padding: '10px 16px', borderBottom: '1px solid #1a2c1d' }}>
-            {['#', 'Person', 'Email', 'Department', 'Company', 'Spend'].map((h) => (
+            {['#', 'Person', 'Email', 'Department', 'Company', claudeMetricMeta.long].map((h) => (
               <span key={h} style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6a8870' }}>{h}</span>
             ))}
           </div>
@@ -1135,7 +1135,7 @@ export function AIToolsPage() {
                     <div style={{ width: `${pct}%`, height: '100%', background: cl.color }} />
                   </div>
                   <span style={{ fontSize: '0.8rem', color: '#e4ede6', fontWeight: 600, width: 56, textAlign: 'right' }}>
-                    {u.spendUsd > 0 ? formatCurrency(u.spendUsd) : '—'}
+                    {u.spendUsd > 0 ? formatClaudeValue(u.spendUsd, claudeMetric) : '—'}
                   </span>
                 </div>
               </div>
