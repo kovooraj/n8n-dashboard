@@ -154,7 +154,7 @@ export function HeartbeatPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 13, marginBottom: 13 }}>
               <BenchKPICard label="Active Users" value={d.kpis.users.value} subBadge={<Delta v={d.kpis.users.delta} />} showInfo tooltip="Distinct heartbeatOS users with at least one tracked action in the current period." />
               <BenchKPICard label="Page Visits" value={d.kpis.visits.value.toLocaleString()} subBadge={<Delta v={d.kpis.visits.delta} />} showInfo tooltip="Total dashboard/tab views across heartbeatOS in the current period." />
-              <BenchKPICard label="AI Insights Run" value={d.kpis.ai.value.toLocaleString()} subBadge={<Delta v={d.kpis.ai.delta} />} showInfo tooltip="Times the Analyze-with-AI engine ran (POST /api/analyze), captured server-side." />
+              <BenchKPICard label="AI Insights Run" value={d.kpis.ai.value.toLocaleString()} subBadge={<Delta v={d.kpis.ai.delta} />} showInfo tooltip="Every AI generation across heartbeatOS — Analyze-with-AI, AI coaching, next-step, email/outreach drafts, opportunity auto-fill, account signals, and ad regeneration — captured server-side." />
               <BenchKPICard label="Hours Saved" value={`${d.kpis.hours.value}h`} subBadge={<Delta v={d.kpis.hours.delta} />} showInfo tooltip="Σ(actions × time-saved multiplier): AI run 20m · export 30m · dashboard open 5m (1×/user/day) · email draft 10m." />
             </div>
 
