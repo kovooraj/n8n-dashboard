@@ -192,7 +192,7 @@ export function HeartbeatPage() {
 
             {/* Breakdown bars */}
             <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 13, marginBottom: 13 }}>
-              <Panel title="Most-Used Dashboards" chip={`${d.activeDashboards} / 6 ACTIVE`}>
+              <Panel title="Most-Used Dashboards" chip={`${d.activeDashboards} / ${d.dashboards.length} ACTIVE`}>
                 <BarList rows={d.dashboards.map((x, i) => ({ name: x.label, value: x.visits, color: DASH_COLORS[i % DASH_COLORS.length] }))} suffix="" />
               </Panel>
               <Panel title="Activity Breakdown">
@@ -286,7 +286,7 @@ function BarList({ rows, suffix }: { rows: { name: string; value: number; color:
     <div>
       {rows.map((r) => (
         <div key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, fontSize: '0.78rem' }}>
-          <span style={{ width: 118, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ width: 152, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 7, lineHeight: 1.2 }}>
             <span style={{ width: 8, height: 8, borderRadius: 2, background: r.color, flexShrink: 0 }} />{r.name}
           </span>
           <span style={{ flex: 1, height: 7, background: '#112014', borderRadius: 5, overflow: 'hidden' }}>

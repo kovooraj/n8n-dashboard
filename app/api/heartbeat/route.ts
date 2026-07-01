@@ -9,15 +9,21 @@ export const maxDuration = 30;
 // read from the shared Supabase project (heartbeat_events written by heartbeatOS).
 // No changes to heartbeatOS are needed at read time; it just emits events.
 
+// Keep in sync with heartbeatOS lib/roles.ts ALL_VIEWS + Sidebar labels. New
+// views still auto-appear via discovery once they receive events; listing them
+// here makes them show (as "Not used") even before their first event.
 const DASH_LABELS: Record<string, { label: string; brand: 'sinalite' | 'willowpack' | null }> = {
+  pipeline: { label: 'Pipeline Performance', brand: 'willowpack' },
   am: { label: 'AM Performance', brand: 'willowpack' },
   ads: { label: 'Ads Performance', brand: 'willowpack' },
-  pipeline: { label: 'Pipeline', brand: 'willowpack' },
-  'wl-apollo': { label: 'WL- Apollo', brand: 'willowpack' },
-  'sl-revenue': { label: 'SL- Revenue', brand: 'sinalite' },
+  'sl-revenue': { label: 'SL- Revenue Performance', brand: 'sinalite' },
+  'wl-apollo': { label: 'WL- Apollo Performance', brand: 'willowpack' },
+  cx: { label: 'CX Performance', brand: 'willowpack' },
   bdr: { label: 'BDR Performance', brand: 'willowpack' },
+  ae: { label: 'AE Performance', brand: 'willowpack' },
+  chat: { label: 'Chat', brand: null },
 };
-const DASH_ORDER = ['am', 'ads', 'sl-revenue', 'pipeline', 'wl-apollo', 'bdr'];
+const DASH_ORDER = ['pipeline', 'am', 'ads', 'sl-revenue', 'wl-apollo', 'cx', 'bdr', 'ae', 'chat'];
 
 const DASHBOARD_OPEN_MINUTES = 5; // credit per user, per dashboard, per day (deduped)
 
