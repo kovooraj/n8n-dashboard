@@ -231,10 +231,12 @@ export function HeartbeatPage() {
               </table>
             </div>
 
-            {/* Top users */}
+            {/* All users — active first, then 0-activity (new/inactive) dimmed */}
             {d.topUsers.length > 0 && (
               <div style={{ background: '#0d1810', border: '1px solid #1a2c1d', borderRadius: 10, padding: '16px 18px', marginBottom: 13 }}>
-                <h3 style={{ fontSize: '0.82rem', margin: '0 0 14px', fontWeight: 600 }}>Top Users <span style={{ color: '#6a8870', fontWeight: 500 }}>· by hours saved</span></h3>
+                <h3 style={{ fontSize: '0.82rem', margin: '0 0 14px', fontWeight: 600 }}>
+                  All Users <span style={{ color: '#6a8870', fontWeight: 500 }}>· active first, by hours saved</span>
+                </h3>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                   <thead><tr>
                     {['User', 'Role', 'Sessions', 'Actions', 'AI runs', 'Hrs saved'].map((h, i) => (
@@ -242,14 +244,22 @@ export function HeartbeatPage() {
                     ))}
                   </tr></thead>
                   <tbody>
-                    {d.topUsers.map((u) => (
-                      <tr key={u.email}>
-                        <td style={{ padding: '11px 0', borderTop: '1px solid #1a2c1d' }}>{u.name}</td>
-                        <td style={{ padding: '11px 0', borderTop: '1px solid #1a2c1d', color: '#6a8870', textTransform: 'capitalize' }}>{u.role}</td>
-                        <Cell v={u.sessions} /><Cell v={u.events} /><Cell v={u.ai} />
-                        <td style={{ padding: '11px 0', borderTop: '1px solid #1a2c1d', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}><b>{u.hours}h</b></td>
-                      </tr>
-                    ))}
+                    {d.topUsers.map((u) => {
+                      const inactive = u.events === 0;
+                      return (
+                        <tr key={u.email} style={{ opacity: inactive ? 0.45 : 1 }}>
+                          <td style={{ padding: '11px 0', borderTop: '1px solid #1a2c1d' }}>
+                            {u.name}
+                            {inactive && <span style={{ marginLeft: 7, fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.06em', color: '#6a8870' }}>NO ACTIVITY</span>}
+                          </td>
+                          <td style={{ padding: '11px 0', borderTop: '1px solid #1a2c1d', color: '#6a8870', textTransform: 'capitalize' }}>{u.role}</td>
+                          <Cell v={u.sessions} /><Cell v={u.events} /><Cell v={u.ai} />
+                          <td style={{ padding: '11px 0', borderTop: '1px solid #1a2c1d', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                            {u.hours > 0 ? <b>{u.hours}h</b> : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

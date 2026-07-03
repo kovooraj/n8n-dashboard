@@ -218,12 +218,33 @@ export async function GET(req: NextRequest) {
 
   const userMeta = new Map((userRows || []).map((u: any) => [u.id, u]));
 
+  // Merge all known heartbeat_users into byUser so new users with 0 events still appear.
+  for (const u of (userRows || []) as any[]) {
+    if (!byUser.has(u.id) && !excluded.has(u.id)) {
+      byUser.set(u.id, {
+        email: u.email || '—',
+        name: u.full_name || u.email || 'Unknown',
+        sessions: new Set<string>(),
+        events: 0,
+        ai: 0,
+        minutes: 0,
+      });
+    }
+  }
+
   // Auto-discover dashboards: known ones in fixed order, then any NEW view key
-  // that shows up in events (so adding a dashboard to heartbeatOS needs no change
-  // here — it appears automatically with a prettified label).
+  // from events, then any view keys found in user allowed_views (covers dashboards
+  // that exist but have zero events yet — new dashboards appear immediately).
   const prettify = (k: string) => k.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-  const discovered = [...byView.keys()].filter((k) => k && k !== 'other' && !DASH_ORDER.includes(k));
-  const allViewKeys = [...DASH_ORDER, ...discovered];
+  const discoveredFromEvents = [...byView.keys()].filter((k) => k && k !== 'other' && !DASH_ORDER.includes(k));
+  const viewsFromUsers = new Set<string>();
+  for (const u of (userRows || []) as any[]) {
+    if (Array.isArray(u.allowed_views)) {
+      for (const v of u.allowed_views as string[]) { if (v && v !== 'other') viewsFromUsers.add(v); }
+    }
+  }
+  const discoveredFromUsers = [...viewsFromUsers].filter((k) => !DASH_ORDER.includes(k) && !discoveredFromEvents.includes(k));
+  const allViewKeys = [...DASH_ORDER, ...discoveredFromEvents, ...discoveredFromUsers];
 
   const dashboards = allViewKeys
     .map((key) => {
@@ -256,8 +277,12 @@ export async function GET(req: NextRequest) {
         hours: Math.round((u.minutes / 60) * 10) / 10,
       };
     })
-    .sort((a, b) => b.hours - a.hours || b.events - a.events)
-    .slice(0, 8);
+    // Active users (any events) first by hours desc, then 0-activity users alpha
+    .sort((a, b) => {
+      const aActive = a.events > 0, bActive = b.events > 0;
+      if (aActive !== bActive) return aActive ? -1 : 1;
+      return b.hours - a.hours || b.events - a.events || a.name.localeCompare(b.name);
+    });
 
   const activity = [
     { key: 'page_view', label: 'Page views', value: byType['page_view'] || 0 },
