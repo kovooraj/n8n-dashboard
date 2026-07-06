@@ -18,6 +18,8 @@ interface HeartbeatData {
   totalUsers: number;
   activeDashboards: number;
   kpis: { visits: KV; users: KV; ai: KV; hours: KV };
+  kpiPeriodLabel: string;
+  kpiIsCurrent: boolean;
   series: { label: string; visits: number; users: number; ai: number; hours: number }[];
   dashboards: { key: string; label: string; brand: string | null; visits: number; users: number; ai: number; hours: number; live: boolean }[];
   activity: { key: string; label: string; value: number }[];
@@ -151,6 +153,12 @@ export function HeartbeatPage() {
         {d && d.configured && (
           <>
             {/* KPIs */}
+            {d.kpiPeriodLabel && (
+              <div style={{ fontSize: '0.68rem', color: '#6a8870', marginBottom: 8, letterSpacing: '0.02em' }}>
+                Headline figures for <span style={{ color: '#e4ede6', fontWeight: 600 }}>{d.kpiPeriodLabel}</span>
+                {d.kpiIsCurrent ? ' (in progress)' : ' — the latest period with activity'}. The charts below show the full trend.
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 13, marginBottom: 13 }}>
               <BenchKPICard label="Active Users" value={d.kpis.users.value} subBadge={<Delta v={d.kpis.users.delta} />} showInfo tooltip="Distinct heartbeatOS users with at least one tracked action in the current period." />
               <BenchKPICard label="Page Visits" value={d.kpis.visits.value.toLocaleString()} subBadge={<Delta v={d.kpis.visits.delta} />} showInfo tooltip="Total dashboard/tab views across heartbeatOS in the current period." />

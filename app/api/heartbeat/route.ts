@@ -171,12 +171,29 @@ export async function GET(req: NextRequest) {
     }
     return { visits, users: users.size, ai, hours: Math.round((minutes / 60) * 10) / 10 };
   }
-  const lastB = buckets[buckets.length - 1];
-  const prevB = buckets[buckets.length - 2];
+  // The KPI cards summarize the LATEST period that actually has activity — so
+  // rolling into a fresh, still-empty month/week doesn't show all zeros while
+  // the chart clearly has data. If that period is the current (in-progress) one
+  // we compare it to the same elapsed slice of the prior period; if it's a
+  // completed past period we compare full period vs full previous period.
   const nowMs = now.getTime();
-  const elapsed = nowMs - lastB.start;
-  const cur = aggWindow(lastB.start, nowMs);
-  const prev = prevB ? aggWindow(prevB.start, prevB.start + elapsed) : { visits: 0, users: 0, ai: 0, hours: 0 };
+  const hasData = (b: (typeof seriesOut)[number]) => b.visits > 0 || b.users > 0 || b.ai > 0;
+  let kpiIdx = seriesOut.length - 1;
+  for (let i = seriesOut.length - 1; i >= 0; i--) { if (hasData(seriesOut[i])) { kpiIdx = i; break; } }
+  const kpiIsCurrent = kpiIdx === buckets.length - 1;
+
+  let cur: { visits: number; users: number; ai: number; hours: number };
+  let prev: { visits: number; users: number; ai: number; hours: number };
+  if (kpiIsCurrent) {
+    const lastB = buckets[kpiIdx];
+    const prevB = buckets[kpiIdx - 1];
+    const elapsed = nowMs - lastB.start;
+    cur = aggWindow(lastB.start, nowMs);
+    prev = prevB ? aggWindow(prevB.start, prevB.start + elapsed) : { visits: 0, users: 0, ai: 0, hours: 0 };
+  } else {
+    cur = seriesOut[kpiIdx];
+    prev = seriesOut[kpiIdx - 1] || { visits: 0, users: 0, ai: 0, hours: 0 };
+  }
   const delta = (a: number, b: number) => (b === 0 ? (a > 0 ? 100 : 0) : Math.round(((a - b) / b) * 1000) / 10);
   const kpis = {
     visits: { value: cur.visits, delta: delta(cur.visits, prev.visits) },
@@ -184,6 +201,7 @@ export async function GET(req: NextRequest) {
     ai: { value: cur.ai, delta: delta(cur.ai, prev.ai) },
     hours: { value: cur.hours, delta: delta(cur.hours, prev.hours) },
   };
+  const kpiPeriodLabel = buckets[kpiIdx]?.label ?? '';
 
   // ---- breakdown by dashboard (over the whole window) -----------------------
   const byView = new Map<string, { visits: number; users: Set<string>; ai: number; minutes: number }>();
@@ -297,6 +315,8 @@ export async function GET(req: NextRequest) {
     totalUsers: (userRows || []).length,
     activeDashboards,
     kpis,
+    kpiPeriodLabel,
+    kpiIsCurrent,
     series: seriesOut,
     dashboards,
     activity,
