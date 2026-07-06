@@ -91,6 +91,8 @@ function uniqKey(e: Ev): string { return e.user_id || e.session_id || 'anon'; }
 export async function GET(req: NextRequest) {
   const period = (req.nextUrl.searchParams.get('period') || 'weekly') as DashboardPeriod;
   const brand = req.nextUrl.searchParams.get('brand') || 'all'; // all | sinalite | willowpack
+  // Optional month selector for the Monthly tab: "YYYY-M" (0-based month, matches bucket.key).
+  const monthParam = req.nextUrl.searchParams.get('month');
 
   let supabase;
   try { supabase = getSupabase(); }
@@ -98,7 +100,13 @@ export async function GET(req: NextRequest) {
 
   const now = new Date();
   const buckets = buildBuckets(period, now);
-  const sinceISO = new Date(buckets[0].start).toISOString();
+  // If an explicit month is picked that predates the trend window, widen the fetch to cover it.
+  let windowStart = buckets[0].start;
+  if (period === 'monthly' && monthParam && /^\d{4}-\d{1,2}$/.test(monthParam)) {
+    const [my, mm] = monthParam.split('-').map(Number);
+    if (mm >= 0 && mm <= 11) windowStart = Math.min(windowStart, new Date(my, mm, 1).getTime());
+  }
+  const sinceISO = new Date(windowStart).toISOString();
 
   // Pull all events in window (internal volume is small) + the user roster.
   const [{ data: evRows, error: evErr }, { data: userRows }, { data: settingRows }] = await Promise.all([
@@ -180,58 +188,101 @@ export async function GET(req: NextRequest) {
   const hasData = (b: (typeof seriesOut)[number]) => b.visits > 0 || b.users > 0 || b.ai > 0;
   let kpiIdx = seriesOut.length - 1;
   for (let i = seriesOut.length - 1; i >= 0; i--) { if (hasData(seriesOut[i])) { kpiIdx = i; break; } }
-  const kpiIsCurrent = kpiIdx === buckets.length - 1;
 
+  // On the Monthly tab we focus on ONE calendar month — the picked month, or by
+  // default the latest month with activity. KPIs, breakdowns, activity and top
+  // users all reflect that month; the trend charts still show the full window.
+  let focusStart: number | null = null;
+  let focusEnd: number | null = null;
+  let focusLabel = '';
+  let selectedMonth: string | null = null;
+  if (period === 'monthly') {
+    let fy: number, fm: number;
+    if (monthParam && /^\d{4}-\d{1,2}$/.test(monthParam) && Number(monthParam.split('-')[1]) <= 11) {
+      [fy, fm] = monthParam.split('-').map(Number);
+    } else {
+      const b = new Date(buckets[kpiIdx].start);
+      fy = b.getFullYear(); fm = b.getMonth();
+    }
+    focusStart = new Date(fy, fm, 1).getTime();
+    focusEnd = new Date(fy, fm + 1, 1).getTime();
+    focusLabel = `${MONTHS[fm]} ${fy}`;
+    selectedMonth = `${fy}-${fm}`;
+  }
+
+  const delta = (a: number, b: number) => (b === 0 ? (a > 0 ? 100 : 0) : Math.round(((a - b) / b) * 1000) / 10);
   let cur: { visits: number; users: number; ai: number; hours: number };
   let prev: { visits: number; users: number; ai: number; hours: number };
-  if (kpiIsCurrent) {
-    const lastB = buckets[kpiIdx];
-    const prevB = buckets[kpiIdx - 1];
-    const elapsed = nowMs - lastB.start;
-    cur = aggWindow(lastB.start, nowMs);
-    prev = prevB ? aggWindow(prevB.start, prevB.start + elapsed) : { visits: 0, users: 0, ai: 0, hours: 0 };
+  let kpiPeriodLabel: string;
+  let kpiIsCurrent: boolean;
+
+  if (focusStart != null && focusEnd != null) {
+    // Month-scoped KPIs: selected month vs the previous calendar month.
+    kpiIsCurrent = focusEnd > nowMs;
+    const fd = new Date(focusStart);
+    const prevStart = new Date(fd.getFullYear(), fd.getMonth() - 1, 1).getTime();
+    if (kpiIsCurrent) {
+      cur = aggWindow(focusStart, nowMs);
+      prev = aggWindow(prevStart, prevStart + (nowMs - focusStart));
+    } else {
+      cur = aggWindow(focusStart, focusEnd);
+      prev = aggWindow(prevStart, focusStart);
+    }
+    kpiPeriodLabel = focusLabel;
   } else {
-    cur = seriesOut[kpiIdx];
-    prev = seriesOut[kpiIdx - 1] || { visits: 0, users: 0, ai: 0, hours: 0 };
+    // Weekly / quarterly / annually: latest period that has activity.
+    kpiIsCurrent = kpiIdx === buckets.length - 1;
+    if (kpiIsCurrent) {
+      const lastB = buckets[kpiIdx];
+      const prevB = buckets[kpiIdx - 1];
+      const elapsed = nowMs - lastB.start;
+      cur = aggWindow(lastB.start, nowMs);
+      prev = prevB ? aggWindow(prevB.start, prevB.start + elapsed) : { visits: 0, users: 0, ai: 0, hours: 0 };
+    } else {
+      cur = seriesOut[kpiIdx];
+      prev = seriesOut[kpiIdx - 1] || { visits: 0, users: 0, ai: 0, hours: 0 };
+    }
+    kpiPeriodLabel = buckets[kpiIdx]?.label ?? '';
   }
-  const delta = (a: number, b: number) => (b === 0 ? (a > 0 ? 100 : 0) : Math.round(((a - b) / b) * 1000) / 10);
   const kpis = {
     visits: { value: cur.visits, delta: delta(cur.visits, prev.visits) },
     users: { value: cur.users, delta: delta(cur.users, prev.users) },
     ai: { value: cur.ai, delta: delta(cur.ai, prev.ai) },
     hours: { value: cur.hours, delta: delta(cur.hours, prev.hours) },
   };
-  const kpiPeriodLabel = buckets[kpiIdx]?.label ?? '';
+
+  // Events scoped to the focus month (Monthly tab) or the whole window otherwise.
+  const focusEvents = (focusStart != null && focusEnd != null)
+    ? events.filter((e) => { const t = new Date(e.created_at).getTime(); return t >= focusStart! && t < focusEnd!; })
+    : events;
 
   // ---- breakdown by dashboard (over the whole window) -----------------------
   const byView = new Map<string, { visits: number; users: Set<string>; ai: number; minutes: number }>();
   const byType: Record<string, number> = {};
   const byUser = new Map<string, { email: string; name: string; sessions: Set<string>; events: number; ai: number; minutes: number }>();
 
-  for (const e of events) {
+  const openByView = new Set<string>(); // dedup dashboard-open credit: `${user}|${view}|${day}`
+  for (const e of focusEvents) {
     byType[e.event_type] = (byType[e.event_type] || 0) + 1;
     const v = e.view || 'other';
     if (!byView.has(v)) byView.set(v, { visits: 0, users: new Set(), ai: 0, minutes: 0 });
     const bv = byView.get(v)!;
-    bv.users.add(uniqKey(e));
-    if (e.event_type === 'page_view') bv.visits++;
+    const uk = uniqKey(e);
+    bv.users.add(uk);
+    if (e.event_type === 'page_view') {
+      bv.visits++;
+      const ck = `${uk}|${v}|${e.created_at.slice(0, 10)}`;
+      if (!openByView.has(ck)) { openByView.add(ck); bv.minutes += DASHBOARD_OPEN_MINUTES; }
+    }
     if (e.event_type === 'ai_insight') bv.ai++;
     bv.minutes += Number(e.minutes_saved || 0);
 
-    const uk = uniqKey(e);
     if (!byUser.has(uk)) byUser.set(uk, { email: e.user_email || '—', name: e.user_email || 'Unknown', sessions: new Set(), events: 0, ai: 0, minutes: 0 });
     const bu = byUser.get(uk)!;
     if (e.session_id) bu.sessions.add(e.session_id);
     bu.events++;
     if (e.event_type === 'ai_insight') bu.ai++;
     bu.minutes += Number(e.minutes_saved || 0);
-  }
-
-  // add deduped dashboard-open credit into per-view minutes
-  for (const ck of openCredit) {
-    const view = ck.split('|')[2];
-    const bv = byView.get(view);
-    if (bv) bv.minutes += DASHBOARD_OPEN_MINUTES;
   }
 
   const userMeta = new Map((userRows || []).map((u: any) => [u.id, u]));
@@ -309,6 +360,11 @@ export async function GET(req: NextRequest) {
     { key: 'export', label: 'Exports', value: byType['export'] || 0 },
   ];
 
+  // Months offered in the Monthly-tab dropdown (the trend buckets, newest first).
+  const availableMonths = period === 'monthly'
+    ? buckets.map((b) => { const [y, m] = b.key.split('-').map(Number); return { key: b.key, label: `${MONTHS[m]} ${y}` }; }).reverse()
+    : [];
+
   return NextResponse.json({
     configured: true,
     period, brand,
@@ -317,6 +373,8 @@ export async function GET(req: NextRequest) {
     kpis,
     kpiPeriodLabel,
     kpiIsCurrent,
+    availableMonths,
+    selectedMonth,
     series: seriesOut,
     dashboards,
     activity,

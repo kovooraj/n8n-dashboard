@@ -20,6 +20,8 @@ interface HeartbeatData {
   kpis: { visits: KV; users: KV; ai: KV; hours: KV };
   kpiPeriodLabel: string;
   kpiIsCurrent: boolean;
+  availableMonths: { key: string; label: string }[];
+  selectedMonth: string | null;
   series: { label: string; visits: number; users: number; ai: number; hours: number }[];
   dashboards: { key: string; label: string; brand: string | null; visits: number; users: number; ai: number; hours: number; live: boolean }[];
   activity: { key: string; label: string; value: number }[];
@@ -38,14 +40,16 @@ const PERIOD_CHIP: Record<DashboardPeriod, string> = { weekly: 'PER WEEK', month
 export function HeartbeatPage() {
   const [period, setPeriod] = useState<DashboardPeriod>('weekly');
   const [brand, setBrand] = useState<Brand>('all');
+  const [month, setMonth] = useState<string | null>(null); // selected month key on the Monthly tab
 
   const fetcher = useCallback(async (): Promise<HeartbeatData> => {
-    const res = await fetch(`/api/heartbeat?period=${period}&brand=${brand}`);
+    const q = `period=${period}&brand=${brand}` + (period === 'monthly' && month ? `&month=${month}` : '');
+    const res = await fetch(`/api/heartbeat?${q}`);
     return res.json();
-  }, [period, brand]);
+  }, [period, brand, month]);
 
   const { data, loading, refreshing, refresh, error } = useStaleData<HeartbeatData>(
-    `heartbeat:${period}:${brand}`, fetcher, [period, brand],
+    `heartbeat:${period}:${brand}:${period === 'monthly' ? month || 'auto' : ''}`, fetcher, [period, brand, month],
   );
 
   const d = data;
@@ -101,7 +105,19 @@ export function HeartbeatPage() {
 
         {/* Controls */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 18 }}>
-          <PeriodTabs active={period} onChange={setPeriod} />
+          <PeriodTabs active={period} onChange={(p) => { setPeriod(p); setMonth(null); }} />
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {period === 'monthly' && d?.availableMonths?.length ? (
+              <select
+                value={month ?? d.selectedMonth ?? ''}
+                onChange={(e) => setMonth(e.target.value)}
+                style={{ fontSize: '0.68rem', fontWeight: 600, letterSpacing: '0.04em', padding: '7px 10px', borderRadius: 7, cursor: 'pointer', border: '1px solid #1a2c1d', background: '#0d1810', color: '#e4ede6' }}
+              >
+                {d.availableMonths.map((m) => (
+                  <option key={m.key} value={m.key} style={{ background: '#0d1810' }}>{m.label}</option>
+                ))}
+              </select>
+            ) : null}
           <div style={{ display: 'flex', gap: 6 }}>
             {(['all', 'sinalite', 'willowpack'] as Brand[]).map((b) => (
               <button key={b} onClick={() => setBrand(b)}
@@ -109,6 +125,7 @@ export function HeartbeatPage() {
                 {b === 'all' ? 'All' : b === 'sinalite' ? 'SinaLite' : 'Willowpack'}
               </button>
             ))}
+          </div>
           </div>
         </div>
 
